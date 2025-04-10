@@ -1,0 +1,82 @@
+[project]
+name = "ts-energy-patterns"
+version = "0.1.0"
+description = "Time series decomposition module for analyzing energy demand patterns and forecast"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "numpy>=2.2.4",
+  "pandas>=2.2.3",
+  "scikit-learn>=1.6.1",
+  "statsmodels>=0.14.4",
+  "xgboost>=3.0.0",
+]
+
+[dependency-groups]
+dev = ["ipykernel>=6.29.5", "ruff>=0.11.4"]
+
+[tool.ruff]
+line-length = 88
+src = ["src"] # Source code
+exclude = [
+  ".venv",
+  ".mypy_cache",
+  ".ruff_cache",
+  "**/.cache",
+  "build",
+  "dist",
+  ".git",
+] # Common exclusions
+
+select = [
+  "E",    # PEP 8 errors
+  "F",    # Pyflakes
+  "I",    # isort
+  "UP",   # pyupgrade
+  "D",    # pydocstyle
+  "ANN",  # flake8-annotations
+  "S",    # flake8-simplify
+  "BLE",  # flake8-blake3
+  "A",    # flake8-builtins
+  "ARG",  # flake8-argparse
+  "C4",   # flake8-comprehensions
+  "PL",   # pylint (a subset)
+  "TRY",  # tryceratops
+  "SLF",  # flake8-self
+  "SIM",  # flake8-simplify
+  "FURB", # refurb
+  "RUF",  # Ruff-specific rules
+  "N",    # pep8-naming
+  "COM",  # flake8-commas
+  "PERF", # Perflint
+]
+
+# select = ["ALL"]
+
+ignore = [
+  "E501",   # Line too long (if you have a higher line-length and want to allow it)
+  "D100",   # Missing docstring (if you're not strict about docstrings)
+  "D101",   # Missing docstring in public class
+  "D102",   # Missing docstring in public method
+  "D103",   # Missing docstring in public function
+  "D104",   # Missing docstring in public package
+  "D105",   # Missing docstring in public module
+  "D400",   # First line should end with a period
+  "ANN001", # Missing type annotation for function argument
+  "ANN002", # Missing type annotation for *args
+  "ANN003", # Missing type annotation for **kwargs
+  "ANN201", # Missing return type annotation for public function
+  "ANN202", # Missing return type annotation for public method
+]
+
+fixable = ["E", "F", "I", "UP", "RUF", "SIM", "COM"]
+
+[tool.ruff.pydocstyle]
+convention = "google" # Or "numpy", "pep257", etc.
+
+[tool.ruff.flake8-quotes]
+inline-quotes = "double" # Or "single"
+
+
+# [tool.ruff.isort]
+# known-first-party = ["own_package"]
