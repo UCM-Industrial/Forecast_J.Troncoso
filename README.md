@@ -48,10 +48,10 @@ pip install -e ".[dev]"
 
 ```bash
 # Create a conda environment with Python 3.13
-conda create -n project-name python=3.13 # or 3.12
+conda create -n ts-energy-patterns python=3.13 # or 3.12
 
 # Activate the environment
-conda activate project-name
+conda activate ts-energy-patterns
 
 # Install pip inside conda environment
 conda install pip
