@@ -11,3 +11,4 @@ wheels/
 
 # Data
 data/raw/**
+data/processed/csv_files/**
