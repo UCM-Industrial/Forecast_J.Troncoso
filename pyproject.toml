@@ -15,7 +15,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ipykernel>=6.29.5", "ruff>=0.11.4"]
+dev = [
+  "catppuccin>=2.4.1",
+  "ipykernel>=6.29.5",
+  "ruff>=0.11.4",
+  "streamlit>=1.44.1",
+  "tabulate>=0.9.0",
+]
 
 [tool.ruff]
 src = ["src"] # Source code
@@ -74,7 +80,7 @@ ignore = [
   "ANN202", # Missing return type annotation for public method
 ]
 
-fixable = ["E", "F", "I", "UP", "RUF", "SIM", "COM"]
+fixable = ["E", "F", "I", "UP", "RUF", "SIM", "COM", "D"]
 
 pydocstyle.convention = "google"
 
