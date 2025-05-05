@@ -43,16 +43,19 @@ def iterate_over_files(
     return results
 
 
-def concat_csv_files(csv_files: list[Path], output_file: Path) -> Path:
+def concat_csv_files(
+    csv_files: list[Path],
+    output_file: Path | None = None,
+) -> pd.DataFrame:
     """Concatenate multiple CSV files into a single dataframe and save it."""
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
     dfs = [pd.read_csv(file) for file in csv_files]
     combined_df = pd.concat(dfs, ignore_index=True)
 
-    combined_df.to_csv(output_file, index=False)
+    if output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        combined_df.to_csv(output_file, index=False)
 
-    return output_file
+    return combined_df
 
 
 if __name__ == "__main__":
