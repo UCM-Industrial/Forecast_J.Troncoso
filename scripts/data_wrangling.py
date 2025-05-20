@@ -58,12 +58,45 @@ def concat_csv_files(
     return combined_df
 
 
-if __name__ == "__main__":
-    data_directory = Path().parent / "data" / "raw" / "hourly_real_generation"
+def _data_convertion_to_csv():
+    """Backup snippet for datasets convertion from tsv to csv."""
     output_directory = Path().parent / "data" / "processed" / "csv_files"
+    data_directory = Path().parent / "data" / "raw" / "hourly_real_generation"
     iterate_over_files(
         data_directory,
         files_filter="*.tsv",
         mapping_function=convert_to_csv,
         output_dir=output_directory,
     )
+
+
+# WARNING: This function is heavy; load 6-7 GB of RAM processing the data.
+def _data_wrangling_to_pivot():
+    """Backup snippet for datasets convertion from tsv to csv."""
+    data_directory = Path().parent / "data" / "processed" / "csv_files"
+    data_pattern = "*.csv"
+
+    files_to_concat = sorted(data_directory.glob(data_pattern))
+
+    print("Loading data")
+    historic_df = concat_csv_files(
+        csv_files=files_to_concat,
+    )
+    print("Pivoting")
+    historic_pivot_df = historic_df.pivot_table(
+        index=["fecha_opreal", "hora_opreal"],
+        columns="central_tipo_nemotecnico",
+        values="generacion_real_mwh",
+        aggfunc="sum",
+    )
+
+    print(f"Saving\n{historic_pivot_df.info()}")
+    historic_pivot_df.to_csv(
+        data_directory.parent / "generation_historic_nemotecnico.csv",
+    )
+
+    print("Done")
+
+
+if __name__ == "__main__":
+    _data_wrangling_to_pivot()

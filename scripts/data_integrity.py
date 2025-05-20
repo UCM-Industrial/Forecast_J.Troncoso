@@ -1,4 +1,6 @@
+import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
 def prepare_dataframe(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
@@ -418,3 +420,72 @@ def check_time_series(
         results["hour_issues"] = hour_results
 
     return results
+
+
+def calculate_validation_metrics(combined_df):
+    """Calculate various validation metrics between pairs of columns with _df1 and _df2 suffixes."""
+    results = []
+
+    # Get base column names (without suffixes)
+    base_columns = set()
+    for col in combined_df.columns:
+        if col.endswith("_df1"):
+            base_columns.add(col[:-4])
+
+    # Calculate metrics for each column pair
+    for base_col in base_columns:
+        col1 = f"{base_col}_df1"
+        col2 = f"{base_col}_df2"
+
+        if col1 not in combined_df.columns or col2 not in combined_df.columns:
+            continue
+
+        # Skip non-numeric columns
+        if not np.issubdtype(combined_df[col1].dtype, np.number) or not np.issubdtype(
+            combined_df[col2].dtype,
+            np.number,
+        ):
+            continue
+
+        # Drop NaN values for calculations
+        valid_data = combined_df[[col1, col2]].dropna()
+        if len(valid_data) == 0:
+            continue
+
+        x = valid_data[col1]
+        y = valid_data[col2]
+
+        # Calculate metrics
+        mse = mean_squared_error(x, y)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(x, y)
+
+        # Handle R² calculation (can be negative if model performs worse than baseline)
+        try:
+            r2 = r2_score(x, y)
+        except:
+            r2 = np.nan
+
+        # Calculate correlation
+        try:
+            corr = x.corr(y)
+        except:
+            corr = np.nan
+
+        # Calculate percent difference
+        mean_abs_percent_diff = np.mean(np.abs((x - y) / ((x + y) / 2))) * 100
+
+        results.append(
+            {
+                "column": base_col,
+                "mse": mse,
+                "rmse": rmse,
+                "mae": mae,
+                "r2": r2,
+                "correlation": corr,
+                "mean_abs_percent_diff": mean_abs_percent_diff,
+                "samples": len(valid_data),
+            },
+        )
+
+    return pd.DataFrame(results).sort_values("column")

@@ -65,11 +65,17 @@ def make_date_columns(
 def filter_by_date_range(
     df: pd.DataFrame,
     date_col: str,
-    start: str,
-    end: str,
+    start_date: str | pd.Timestamp,
+    end_date: str | pd.Timestamp,
 ) -> pd.DataFrame:
-    """Filters a DataFrame to include rows within a specified date range."""
-    start_date = pd.to_datetime(start)
-    end_date = pd.to_datetime(end)
+    """Filters a DataFrame to include rows within a specified date range.
+
+    date_col: str   - Must be a datetime column
+    """
+    if not isinstance(start_date, pd.Timestamp):
+        start_date = pd.to_datetime(start_date)
+    if not isinstance(end_date, pd.Timestamp):
+        end_date = pd.to_datetime(end_date)
+
     mask = (df[date_col] >= start_date) & (df[date_col] <= end_date)
     return df.loc[mask].copy()
