@@ -7,15 +7,15 @@ Advanced time series decomposition module to uncover hidden patterns in energy d
 ### Prerequisites
 
 - Python 3.12+
-- [UV](https://github.com/astral-sh/uv) (recommended)
-- [Ruff](https://github.com/astral-sh/ruff) (pre-installed in dev dependencies)
+- [UV](https://docs.astral.sh/uv/) package manager
+- [Ruff](https://docs.astral.sh/ruff/) formatter (pre-installed in dev dependencies)
 
 ### Installation Options
 
 #### Using UV (Recommended)
 
 ```bash
-# Install uv (globally if not already installed)
+# Install uv (if not already installed)
 pip install uv
 
 # Create and activate the virtual environment
