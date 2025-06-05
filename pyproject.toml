@@ -93,6 +93,7 @@ ignore = [
   "ANN003", # Missing type annotation for **kwargs
   "ANN201", # Missing return type annotation for public function
   "ANN202", # Missing return type annotation for public method
+  "TRY003", # Raise vanilla args
 ]
 
 fixable = ["E", "F", "I", "UP", "RUF", "SIM", "COM", "D"]
