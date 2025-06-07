@@ -1,8 +1,14 @@
+import logging
+from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import regionmask
 import xarray as xr
+from src.logging_config import setup_logging
+
+logger = setup_logging(logger_name="Preprocessing", log_level=logging.DEBUG)
 
 
 class Preprocessor:
@@ -16,7 +22,8 @@ class Preprocessor:
         gdf: gpd.GeoDataFrame | None,
         **kwargs,
     ):
-        mask_gdf = gdf or self.region_mask
+        logger.debug("Masking regions")
+        mask_gdf = gdf
         if mask_gdf is None:
             raise ValueError("No region mask provided")
 
@@ -42,6 +49,7 @@ class Preprocessor:
         gdf: gpd.GeoDataFrame,
         time_coord: str | None = None,
         chunk_size: dict[str, int] | None = None,
+        column_names: str = "Region",
     ) -> pd.DataFrame:
         """Calculate regional means with memory optimization."""
         # Convert to DataArray if needed
@@ -57,9 +65,11 @@ class Preprocessor:
             da = da.chunk(chunk_size)
 
         # Handle time coordinates
-        da = _standardize_time_coord(da, custom_time=time_coord)
+        logger.debug("Handle time coordinates")
+        da = self._standardize_time_coord(da, custom_time=time_coord)
 
         # Calculate regional means
+        logger.debug("Calculate regional means")
         mask = self.mask_regions(da, gdf)
 
         # regions = regionmask.from_geopandas(gdf, names="Region", overlap=False)
@@ -67,11 +77,13 @@ class Preprocessor:
         regional_means = da.groupby(mask).mean(dim=["latitude", "longitude"])
 
         # Convert to DataFrame
+        logger.debug("Convert to df")
         df = regional_means.to_pandas()
-        region_names = dict(enumerate(gdf["Region"]))
+        region_names = dict(enumerate(gdf[column_names]))
         df.columns = df.columns.map(region_names)
 
-        df.index = df.index.tz_localize(self.timezone)
+        df.index = df.index.tz_localize("UTC")
+        df.index = df.index.tz_convert(self.timezone)
         return df.sort_index()
 
     def create_cyclical_encode(
@@ -356,14 +368,49 @@ class Preprocessor:
 
 
 if __name__ == "__main__":
-    # TODO: Add paths and load the data to test the class.
-    test_da = ""
-    test_gdf = ""
-    test_generation = ""
+    # --- Load data ---
+    data_path = Path().cwd() / "data"
+    test_da = data_path / "raw" / "Weather" / "wind_100m.grib"
+    test_gdf = data_path / "raw" / "Regiones" / "Regional.shp"
+    test_generation = (
+        data_path / "processed" / "public_data" / "generation_historic_tipo.csv"
+    )
 
+    regions_chile = gpd.read_file(test_gdf)
+    logger.debug("Regions data loaded")
+
+    wind_100m = xr.open_dataset(
+        test_da,
+        engine="cfgrib",
+        # filter_by_keys={"paramId": 228247},
+        decode_timedelta=False,
+    )
+    wind_v100m = wind_100m[["v100"]]
+    wind_u100m = wind_100m[["u100"]]
+
+    logger.debug("Wind data loaded")
+    # generation = pd.read_csv(test_generation)
+
+    # --- Check GRIB processing ---
     preprocessor = Preprocessor()
 
-    # preprocessor.extract_regional_means()
-    # preprocessor.create_cyclical_encode()
-    # preprocessor.create_local_datetime()
+    logger.debug("Test GRIB extraction")
+    temp_df = preprocessor.extract_regional_means(
+        da=wind_v100m,
+        gdf=regions_chile,
+        chunk_size={"latitude": 50, "longitude": 50},
+    )
+    temp_df.to_csv(data_path / "wind_v100m.csv")
+    logger.info(f"Grib processing done. Export to {data_path / 'wind_v100m.csv'}")
+
+    # --- Check datetime format processing ---
+    # temp_df = preprocessor.create_local_datetime(generation)
+    # temp_df.to_csv("generation_test.csv")
+    # logger.info("Datetime formatted done")
+
+    # --- Check cyclical encoding feature engineering ---
+    # temp_df = preprocessor.create_cyclical_encode(temp_df)
+    # temp_df.to_csv("feature_enginering_test.csv")
+    # logger.info("Cyclical encoding done")
+
     # preprocessor.filter_by_date_range()
