@@ -5,8 +5,9 @@ supporting time-series specific operations, cross-validation, and interpretabili
 """
 
 import warnings
-from abc import ABC, abstractmethod
-from typing import Any
+
+# from abc import ABC, abstractmethod
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -18,43 +19,38 @@ warnings.filterwarnings("ignore")
 
 
 # Core Strategy Interface
-class ModelStrategy(ABC):
+class ModelStrategy(Protocol):
     """Abstract base class for all modeling strategies."""
 
-    def __init__(self, **kwargs) -> None:  # noqa: D107
-        self.model = None
-        self.is_fitted = False
-        self.scaler = None
-        self.feature_names = None
-        self.params = kwargs
+    model: Any
+    is_fitted: bool
+    scaler: Any
+    feature_names: list[str] | None
+    params: dict[str, Any]
 
-    @abstractmethod
     def build_model(self, **params) -> None:
         """Build the model with given parameters."""
-        pass
+        ...
 
-    @abstractmethod
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "ModelStrategy":
         """Fit the model to training data."""
-        pass
+        ...
 
-    @abstractmethod
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """Make predictions on new data."""
-        pass
+        ...
 
-    @abstractmethod
     def get_feature_importance(self) -> dict[str, float] | None:
         """Get feature importance if available."""
-        pass
+        ...
 
     def requires_scaling(self) -> bool:
         """Check if model requires feature scaling."""
-        return True
+        ...
 
     def supports_shap(self) -> bool:
         """Check if model supports SHAP analysis."""
-        return True
+        ...
 
 
 # Concrete Strategy Implementations

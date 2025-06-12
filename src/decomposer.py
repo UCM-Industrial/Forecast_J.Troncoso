@@ -3,10 +3,11 @@
 import logging
 import pickle
 import warnings
-from abc import ABC, abstractmethod
+
+# from abc import Protocol, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
@@ -20,35 +21,33 @@ logger = setup_logging(logger_name="Preprocessor", log_level=logging.DEBUG)
 
 
 # Core Strategy Interface
-class DecompositionStrategy(ABC):
+class DecompositionStrategy(Protocol):
     """Abstract base class for all decomposition strategies."""
 
-    def __init__(self, **kwargs) -> None:  # noqa: D107
-        self.is_fitted = False
-        self.params = kwargs
-        self.decomposition_results = {}
+    is_fitted: bool
+    params: dict[str, Any]
+    decomposition_results: dict[str, pd.Series]
 
-    @abstractmethod
     def decompose(self, series: pd.Series, **params) -> dict[str, pd.Series]:
         """Decompose a single time series."""
-        pass
+        ...
 
-    @abstractmethod
     def get_components(self) -> list[str]:
         """Get list of available components for this decomposition method."""
-        pass
+        ...
 
-    @abstractmethod
     def get_default_params(self, granularity: str, energy_type: str) -> dict[str, Any]:
         """Get default parameters for given granularity and energy type."""
-        pass
+        ...
 
     def validate_series(self, series: pd.Series) -> bool:
         """Validate if series is suitable for this decomposition method."""
+        # TODO: move the logic to the child classes
         return len(series) > 0 and not series.isnull().all()
 
     def supports_multiple_seasonality(self) -> bool:
         """Check if strategy supports multiple seasonal patterns."""
+        # TODO: move the logic to the child classes
         return False
 
 
