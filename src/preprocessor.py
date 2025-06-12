@@ -6,9 +6,8 @@ import numpy as np
 import pandas as pd
 import regionmask
 import xarray as xr
-from src.logging_config import setup_logging
 
-logger = setup_logging(logger_name="Preprocessing", log_level=logging.DEBUG)
+from .logging_config import setup_logging
 
 
 class Preprocessor:
@@ -39,7 +38,6 @@ class Preprocessor:
             **kwargs,
         )
         temp_mask = regions.mask(da.longitude, da.latitude)
-        # masked_ds = da.where(temp_mask.notnull())
 
         return temp_mask
 
@@ -82,6 +80,7 @@ class Preprocessor:
         region_names = dict(enumerate(gdf[column_names]))
         df.columns = df.columns.map(region_names)
 
+        logger.debug(f"Formatting timezone to {self.timezone}")
         df.index = df.index.tz_localize("UTC")
         df.index = df.index.tz_convert(self.timezone)
         return df.sort_index()
@@ -292,29 +291,13 @@ class Preprocessor:
         return da
 
     def filter_by_date_range(
+        self,
         df: pd.DataFrame,
         start_date: str | pd.Timestamp,
         end_date: str | pd.Timestamp,
         date_col: str | None = None,
     ) -> pd.DataFrame:
-        """Filters a DataFrame to include rows within a specified date range.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to filter.
-            start_date (str | pd.Timestamp): The start of the date range.
-            end_date (str | pd.Timestamp): The end of the date range.
-            date_col (str | None, optional): The name of the datetime column in df.
-                                             If None, the DataFrame's index is used.
-                                             Defaults to None.
-
-        Returns:
-            pd.DataFrame: A new DataFrame containing rows within the specified range.
-
-        Raises:
-            ValueError: If date_col is specified but not a datetime type,
-                        or if date_col is None and the index is not a DatetimeIndex.
-            KeyError: If date_col is specified but not found in the DataFrame.
-        """
+        """Filters a DataFrame to include rows within a specified date range."""
         # Ensure start_date and end_date are pandas Timestamps
         if not isinstance(start_date, pd.Timestamp):
             start_date = pd.to_datetime(start_date)
@@ -366,42 +349,100 @@ class Preprocessor:
 
         return df.loc[mask].copy()
 
+    def process_dataset(
+        self,
+        da: xr.Dataset,
+        variables: list[str],
+        path: str | Path,
+    ) -> None:
+        for var in variables:
+            logger.debug(f"Processing for {var}")
+
+            filtered_da = da[[var]]
+
+            logger.debug(f"GRIB extraction: {var}")
+            temp_df = self.extract_regional_means(
+                da=filtered_da,
+                gdf=regions_chile,
+                chunk_size={"latitude": 50, "longitude": 50},
+            )
+
+            new_path = Path(path)
+
+            filename = new_path / f"{var}_means.csv"
+            temp_df.to_csv(filename)
+            logger.info(f"Grib processing done. Export to {filename}")
+
+    def convert_ssrd_to_watts(
+        self,
+        da: xr.Dataset,
+        accumulation_hours: int = 1,
+    ) -> xr.Dataset:
+        """Convert SSRD from J/m² to W/m²."""
+        # Convert from J/m² to W/m²
+        logger.debug("Convert ssrd data")
+        seconds_per_accumulation = accumulation_hours * 3600
+        da_watts = da / seconds_per_accumulation
+
+        # Update attributes
+        da_watts.attrs = da.attrs.copy()
+        da_watts.attrs["units"] = "W m**-2"
+
+        # Update long_name if it exists
+        if "long_name" in da_watts.attrs:
+            da_watts.attrs["long_name"] = da_watts.attrs["long_name"].replace(
+                "J m**-2",
+                "W m**-2",
+            )
+
+        # Add conversion info to history
+        if "history" in da_watts.attrs:
+            da_watts.attrs["history"] += (
+                f" | Converted from J/m² to W/m² (÷{seconds_per_accumulation}s)"
+            )
+        else:
+            da_watts.attrs["history"] = (
+                f"Converted from J/m² to W/m² (÷{seconds_per_accumulation}s)"
+            )
+
+        return da_watts
+
 
 if __name__ == "__main__":
+    logger = setup_logging(logger_name="Preprocessing", log_level=logging.DEBUG)
     # --- Load data ---
     data_path = Path().cwd() / "data"
-    test_da = data_path / "raw" / "Weather" / "wind_100m.grib"
+    test_da = data_path / "raw" / "Weather" / "radiation_clouds.grib"
     test_gdf = data_path / "raw" / "Regiones" / "Regional.shp"
     test_generation = (
         data_path / "processed" / "public_data" / "generation_historic_tipo.csv"
     )
 
     regions_chile = gpd.read_file(test_gdf)
-    logger.debug("Regions data loaded")
 
-    wind_100m = xr.open_dataset(
+    logger.debug(f"Reading the {test_da}")
+    weather = xr.open_dataset(
         test_da,
         engine="cfgrib",
-        # filter_by_keys={"paramId": 228247},
         decode_timedelta=False,
+        filter_by_keys={"shortName": "ssrd"},
     )
-    wind_v100m = wind_100m[["v100"]]
-    wind_u100m = wind_100m[["u100"]]
 
-    logger.debug("Wind data loaded")
-    # generation = pd.read_csv(test_generation)
+    variables_to_extract = ["ssrd"]
+    weather_filtered = weather[variables_to_extract]
 
-    # --- Check GRIB processing ---
     preprocessor = Preprocessor()
 
-    logger.debug("Test GRIB extraction")
-    temp_df = preprocessor.extract_regional_means(
-        da=wind_v100m,
-        gdf=regions_chile,
-        chunk_size={"latitude": 50, "longitude": 50},
+    ssrd_watts = preprocessor.convert_ssrd_to_watts(
+        weather,
+        accumulation_hours=1,
     )
-    temp_df.to_csv(data_path / "wind_v100m.csv")
-    logger.info(f"Grib processing done. Export to {data_path / 'wind_v100m.csv'}")
+
+    preprocessor.process_dataset(
+        ssrd_watts,
+        variables=variables_to_extract,
+        path=data_path,
+    )
 
     # --- Check datetime format processing ---
     # temp_df = preprocessor.create_local_datetime(generation)

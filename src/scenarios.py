@@ -1,7 +1,10 @@
+import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from .logging_config import setup_logging
 
 
 class Scenario:
@@ -37,6 +40,8 @@ class Scenario:
 
     def _validate_columns(self, df: pd.DataFrame, cols: list[str]) -> list[str]:
         """Validate that columns exist in the dataframe and return only valid ones."""
+        logger.debug("Validating columns")
+
         valid_cols = [col for col in cols if col in df.columns]
         if len(valid_cols) != len(cols):
             missing = set(cols) - set(valid_cols)
@@ -47,12 +52,13 @@ class Scenario:
         """Generates realistic future scenarios using simple statistical models.
 
         Args:
-            data (pd.DataFrame): Historical data with datetime index (America/Santiago timezone)
+            data (pd.DataFrame): Historical data with datetime index
             future_years (int): Number of years to generate into the future
 
         Returns:
             pd.DataFrame: Combined historical and synthetic future data
         """
+        logger.debug("Generating future data")
         if not isinstance(data.index, pd.DatetimeIndex):
             raise TypeError("The input DataFrame must have a DatetimeIndex.")
 
@@ -60,7 +66,7 @@ class Scenario:
         clean_data = self._clean_index(data.copy())
 
         # Infer frequency from clean data
-        freq = self._infer_frequency(clean_data)
+        # freq = self._infer_frequency(clean_data)
 
         # Generate future timeline
         last_timestamp = clean_data.index.max()
@@ -108,6 +114,7 @@ class Scenario:
         future_index: pd.DatetimeIndex,
     ) -> pd.DataFrame:
         """Generate synthetic future data using simple statistical models."""
+        logger.debug("Generating synthetic data")
         future_df = pd.DataFrame(index=future_index, columns=historical_df.columns)
 
         for col in historical_df.columns:
@@ -161,12 +168,14 @@ class Scenario:
                 else 1
             )
 
-            # Add realistic noise
+            # Add noise
+            # TODO: Add noise as config paramter
             noise = np.random.normal(0, max(base_std * 0.3, abs(base_value) * 0.1))
 
             synthetic_value = base_value * monthly_factor + noise
 
             # Ensure non-negative for physical variables (like solar irradiance)
+            # NOTE: Some values like wind could have values minor than 0
             if historical_series.min() >= 0:
                 synthetic_value = max(0, synthetic_value)
 
@@ -249,6 +258,8 @@ class Scenario:
         cols: list[str],
     ) -> pd.DataFrame:
         """Apply gradual climate shift over time."""
+        logger.debug(f"Apply climate shift to {cols}")  # Debug
+
         total_change = params.get("change", 0)
         start_year = params.get(
             "start_year",
@@ -278,6 +289,8 @@ class Scenario:
         cols: list[str],
     ) -> pd.DataFrame:
         """Modify seasonal variability patterns."""
+        logger.debug(f"Apply seasonal variability to {cols}")  # Debug
+
         factor = params.get("factor", 1.0)
         window = params.get("window", 24 * 7)  # Weekly window for hourly data
 
@@ -296,6 +309,8 @@ class Scenario:
         cols: list[str],
     ) -> pd.DataFrame:
         """Apply step increases in capacity at specific dates."""
+        logger.debug(f"Apply capacity steps to {cols}")  # Debug
+
         steps = params.get("steps", [])
 
         for col in cols:
@@ -322,6 +337,8 @@ class Scenario:
         cols: list[str],
     ) -> pd.DataFrame:
         """Apply additional synthetic variations to make data more organic."""
+        logger.debug(f"Apply synthetic generation to {cols}")  # Debug
+
         noise_level = params.get("noise_level", 0.05)  # 5% noise by default
 
         for col in cols:
@@ -337,4 +354,5 @@ class Scenario:
 
 
 if __name__ == "__main__":
+    logger = setup_logging(logger_name="Scenario", log_level=logging.DEBUG)
     ...
