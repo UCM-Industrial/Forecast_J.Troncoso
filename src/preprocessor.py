@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 
 import geopandas as gpd
@@ -7,15 +6,13 @@ import pandas as pd
 import regionmask
 import xarray as xr
 
-from .logging_config import setup_logging
-
 
 def mask_regions(
     da: xr.Dataset,
     gdf: gpd.GeoDataFrame | None,
     **kwargs,
 ):
-    logger.debug("Masking regions")
+    """Creates a mask for the given regions."""
     mask_gdf = gdf
     if mask_gdf is None:
         raise ValueError("No region mask provided")
@@ -27,10 +24,7 @@ def mask_regions(
     kwargs.setdefault("names", "Region")
     kwargs.setdefault("overlap", False)
 
-    regions = regionmask.from_geopandas(
-        mask_gdf,
-        **kwargs,
-    )
+    regions = regionmask.from_geopandas(mask_gdf, **kwargs)
     temp_mask = regions.mask(da.longitude, da.latitude)
 
     return temp_mask
@@ -58,30 +52,26 @@ def extract_regional_means(
         da = da.chunk(chunk_size)
 
     # Handle time coordinates
-    logger.debug("Handle time coordinates")
     da = _standardize_time_coord(da, custom_time=time_coord)
 
     # Calculate regional means
-    logger.debug("Calculate regional means")
-    mask = .mask_regions(da, gdf)
+    mask = mask_regions(da, gdf)
 
     # regions = regionmask.from_geopandas(gdf, names="Region", overlap=False)
     # mask = regions.mask(da.longitude, da.latitude)
     regional_means = da.groupby(mask).mean(dim=["latitude", "longitude"])
 
     # Convert to DataFrame
-    logger.debug("Convert to df")
     df = regional_means.to_pandas()
     region_names = dict(enumerate(gdf[column_names]))
     df.columns = df.columns.map(region_names)
 
-    logger.debug(f"Formatting timezone to {timezone}")
     df.index = df.index.tz_localize("UTC")
     df.index = df.index.tz_convert(timezone)
     return df.sort_index()
 
 
-def create_cyclical_encode(
+def create_cyclical_features(
     df: pd.DataFrame,
     datetime_col: str | None = None,
     features: list[str] = ["hour", "day", "month"],
@@ -353,11 +343,8 @@ def process_dataset(
     path: str | Path,
 ) -> None:
     for var in variables:
-        logger.debug(f"Processing for {var}")
-
         filtered_da = da[[var]]
 
-        logger.debug(f"GRIB extraction: {var}")
         temp_df = extract_regional_means(
             da=filtered_da,
             gdf=regions_chile,
@@ -368,7 +355,6 @@ def process_dataset(
 
         filename = new_path / f"{var}_means.csv"
         temp_df.to_csv(filename)
-        logger.info(f"Grib processing done. Export to {filename}")
 
 
 def convert_ssrd_to_watts(
@@ -377,7 +363,6 @@ def convert_ssrd_to_watts(
 ) -> xr.Dataset:
     """Convert SSRD from J/m² to W/m²."""
     # Convert from J/m² to W/m²
-    logger.debug("Convert ssrd data")
     seconds_per_accumulation = accumulation_hours * 3600
     da_watts = da / seconds_per_accumulation
 
@@ -406,38 +391,45 @@ def convert_ssrd_to_watts(
 
 
 if __name__ == "__main__":
-    logger = setup_logging(logger_name="Preprocessing", log_level=logging.DEBUG)
-    # --- Load data ---
+    # --- Declare Paths ---
     data_path = Path().cwd() / "data"
-    test_da = data_path / "raw" / "Weather" / "radiation_clouds.grib"
-    test_gdf = data_path / "raw" / "Regiones" / "Regional.shp"
     test_generation = (
         data_path / "processed" / "public_data" / "generation_historic_tipo.csv"
     )
 
+    input_path = data_path / "1_preprocessing" / "input"
+    output_path = data_path / "1_preprocessing" / "output"
+
+    snowmelt_path = input_path / "snowmelt.grib"
+    runoff_path = input_path / "runoff.grib"
+    regions_chile_path = input_path / "Regiones" / "Regional.shp"
+
+    # --- Define test data ---
+    test_da = runoff_path
+    test_gdf = regions_chile_path
+
     regions_chile = gpd.read_file(test_gdf)
 
-    logger.debug(f"Reading the {test_da}")
     weather = xr.open_dataset(
         test_da,
         engine="cfgrib",
         decode_timedelta=False,
-        filter_by_keys={"shortName": "ssrd"},
+        # filter_by_keys={"shortName": "smlt"},
     )
+    print(weather)
 
-    variables_to_extract = ["ssrd"]
+    variables_to_extract = ["ro"]
     weather_filtered = weather[variables_to_extract]
 
-
-    ssrd_watts = convert_ssrd_to_watts(
-        weather,
-        accumulation_hours=1,
-    )
+    # ssrd_watts = convert_ssrd_to_watts(
+    #     weather,
+    #     accumulation_hours=1,
+    # )
 
     process_dataset(
-        ssrd_watts,
+        weather_filtered,
         variables=variables_to_extract,
-        path=data_path,
+        path=output_path,
     )
 
     # --- Check datetime format processing ---
