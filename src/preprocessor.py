@@ -1,6 +1,8 @@
+import tempfile
 from pathlib import Path
 
 import geopandas as gpd
+import leafmap.foliumap as leafmap
 import numpy as np
 import pandas as pd
 import regionmask
@@ -8,12 +10,12 @@ import xarray as xr
 
 
 def mask_regions(
-    da: xr.Dataset,
-    gdf: gpd.GeoDataFrame | None,
+    _da: xr.DataArray,
+    _gdf: gpd.GeoDataFrame | None,
     **kwargs,
-):
+) -> xr.DataArray:
     """Creates a mask for the given regions."""
-    mask_gdf = gdf
+    mask_gdf = _gdf
     if mask_gdf is None:
         raise ValueError("No region mask provided")
 
@@ -21,31 +23,29 @@ def mask_regions(
         mask_gdf = mask_gdf.to_crs("EPSG:4326")
 
     # Set default values
-    kwargs.setdefault("names", "Region")
+    # kwargs.setdefault("names", "Region")
     kwargs.setdefault("overlap", False)
-
     regions = regionmask.from_geopandas(mask_gdf, **kwargs)
-    temp_mask = regions.mask(da.longitude, da.latitude)
 
-    return temp_mask
+    return regions.mask(_da.longitude, _da.latitude)
 
 
 def extract_regional_means(
-    da: xr.Dataset,
-    gdf: gpd.GeoDataFrame,
+    _ds: xr.Dataset,
+    _gdf: gpd.GeoDataFrame,
+    data_variable: str,
     time_coord: str | None = None,
-    chunk_size: dict[str, int] | None = None,
+    chunk_size: dict[str, int] | None = {"latitude": 50, "longitude": 50},
     column_names: str = "Region",
-    timezone: str = "America/Santiago",
+    output_timezone: str = "America/Santiago",
 ) -> pd.DataFrame:
     """Calculate regional means with memory optimization."""
-    # Convert to DataArray if needed
-    if isinstance(da, xr.Dataset):
-        data_vars = list(da.data_vars)
-        if len(data_vars) == 1:
-            da = da[data_vars[0]]
-        else:
-            raise ValueError("Dataset must have exactly one data variable")
+    if not data_variable or data_variable not in _ds.data_vars:
+        raise ValueError(
+            f"{data_variable} is not a valid data variable in the dataset.",
+        )
+
+    da = _ds[data_variable]
 
     # Apply chunking for memory optimization
     if chunk_size:
@@ -55,19 +55,26 @@ def extract_regional_means(
     da = _standardize_time_coord(da, custom_time=time_coord)
 
     # Calculate regional means
-    mask = mask_regions(da, gdf)
-
-    # regions = regionmask.from_geopandas(gdf, names="Region", overlap=False)
-    # mask = regions.mask(da.longitude, da.latitude)
+    mask = mask_regions(da, _gdf, names=column_names)
     regional_means = da.groupby(mask).mean(dim=["latitude", "longitude"])
+
+    # NOTE: This is a temporal fix
+    if "isobaricInhPa" in regional_means.dims:
+        # Choose one:
+        # regional_means = regional_means.isel(isobaricInhPa=0)  # select level
+        regional_means = regional_means.mean(dim="isobaricInhPa")  # average over levels
 
     # Convert to DataFrame
     df = regional_means.to_pandas()
-    region_names = dict(enumerate(gdf[column_names]))
+    gdf = _gdf.dropna(subset=[column_names])
+    region_names = dict(enumerate(_gdf[column_names]))
     df.columns = df.columns.map(region_names)
 
     df.index = df.index.tz_localize("UTC")
-    df.index = df.index.tz_convert(timezone)
+
+    if output_timezone != "UTC":
+        df.index = df.index.tz_convert(output_timezone)
+
     return df.sort_index()
 
 
@@ -77,7 +84,6 @@ def create_cyclical_features(
     features: list[str] = ["hour", "day", "month"],
 ):
     """Apply cyclical encoding to datetime features."""
-    # Create a copy to avoid modifying the original dataframe
     temp_df = df.copy()
 
     # Determine the datetime series to use
@@ -134,107 +140,6 @@ def create_cyclical_features(
     return temp_df
 
 
-def create_local_datetime(
-    df: pd.DataFrame,
-    timezone: str = "America/Santiago",
-    hour_col: str = "hora_opreal",
-    date_col: str = "fecha_opreal",
-):
-    """Convert fecha_opreal + hora_opreal to timezone-aware datetime index."""
-    df = df.copy()
-
-    # Create base datetime
-    df["datetime"] = pd.to_datetime(df["fecha_opreal"]) + pd.to_timedelta(
-        df["hora_opreal"] - 1,
-        unit="h",
-    )
-
-    # Handle hour 25 (extra hour during DST fall back)
-    mask_25 = df["hora_opreal"] == 25  # noqa: PLR2004
-    df.loc[mask_25, "datetime"] = pd.to_datetime(
-        df.loc[mask_25, "fecha_opreal"],
-    ) + pd.Timedelta(hours=24)
-
-    # Split into normal hours and special cases
-    normal_mask = df["hora_opreal"] <= 24  # noqa: PLR2004
-    df_normal = df[normal_mask].copy()
-    df_hour25 = df[~normal_mask].copy()
-
-    # Handle normal hours with proper DST handling
-    if len(df_normal) > 0:
-        try:
-            df_normal["datetime"] = df_normal["datetime"].dt.tz_localize(
-                timezone,
-                ambiguous="NaT",  # Mark ambiguous times as NaT first
-                nonexistent="shift_forward",
-            )
-
-            # Handle ambiguous times (fall back - 2 occurrences of same hour)
-            ambiguous_mask = df_normal["datetime"].isna()
-            if ambiguous_mask.any():
-                # For ambiguous times, use first=True for first occurrence, False for second
-                ambiguous_dates = df_normal.loc[
-                    ambiguous_mask,
-                    "fecha_opreal",
-                ].unique()
-
-                for date in ambiguous_dates:
-                    date_mask = (df_normal["fecha_opreal"] == date) & ambiguous_mask
-                    ambiguous_hours = df_normal.loc[date_mask, "hora_opreal"].values
-
-                    for i, (idx, row) in enumerate(df_normal[date_mask].iterrows()):
-                        is_first = i < len(ambiguous_hours) // 2
-                        dt_base = pd.to_datetime(date) + pd.to_timedelta(
-                            row["hora_opreal"] - 1,
-                            unit="h",
-                        )
-                        df_normal.loc[idx, "datetime"] = dt_base.tz_localize(
-                            timezone,
-                            ambiguous=is_first,
-                        )
-
-        except Exception:
-            # Fallback: handle each datetime individually
-            df_normal["datetime"] = pd.NaT
-            for idx, row in df_normal.iterrows():
-                dt = pd.to_datetime(row["fecha_opreal"]) + pd.to_timedelta(
-                    row["hora_opreal"] - 1,
-                    unit="h",
-                )
-                try:
-                    df_normal.loc[idx, "datetime"] = dt.tz_localize(
-                        timezone,
-                        ambiguous="infer",
-                    )
-                except:
-                    # For truly ambiguous times, assume first occurrence
-                    df_normal.loc[idx, "datetime"] = dt.tz_localize(
-                        timezone,
-                        ambiguous=True,
-                    )
-
-    # Handle hour 25 (always second occurrence of repeated hour)
-    if len(df_hour25) > 0:
-        for idx, row in df_hour25.iterrows():
-            dt_base = pd.to_datetime(row["fecha_opreal"]) + pd.Timedelta(
-                hours=1,
-            )  # Hour 25 = 01:00 next day
-            df_hour25.loc[idx, "datetime"] = dt_base.tz_localize(
-                timezone,
-                ambiguous=False,
-            )
-
-    # Combine and sort
-    df_combined = pd.concat([df_normal, df_hour25]).sort_values(
-        ["fecha_opreal", "hora_opreal"],
-    )
-
-    return df_combined.set_index("datetime").drop(
-        ["fecha_opreal", "hora_opreal"],
-        axis=1,
-    )
-
-
 def _standardize_time_coord(
     da: xr.DataArray,
     custom_time: str | None,
@@ -278,76 +183,80 @@ def _standardize_time_coord(
     return da
 
 
-def filter_by_date_range(
-    df: pd.DataFrame,
-    start_date: str | pd.Timestamp,
-    end_date: str | pd.Timestamp,
-    date_col: str | None = None,
-) -> pd.DataFrame:
-    """Filters a DataFrame to include rows within a specified date range."""
-    # Ensure start_date and end_date are pandas Timestamps
-    if not isinstance(start_date, pd.Timestamp):
-        start_date = pd.to_datetime(start_date)
-    if not isinstance(end_date, pd.Timestamp):
-        end_date = pd.to_datetime(end_date)
-
-    # Determine which date series to use for filtering
-    if date_col:
-        if date_col not in df.columns:
-            raise KeyError(f"Column '{date_col}' not found in DataFrame.")
-        dates_to_filter = df[date_col]
-        if not pd.api.types.is_datetime64_any_dtype(dates_to_filter):
-            raise ValueError(
-                f"Column '{date_col}' ({dates_to_filter.dtype}) is not a datetime type.",
-            )
-    else:
-        dates_to_filter = df.index
-        if not isinstance(dates_to_filter, pd.DatetimeIndex):
-            raise ValueError(
-                f"DataFrame index ({type(dates_to_filter)}) is not a DatetimeIndex.",
-            )
-
-    # Make start_date and end_date compatible with the timezone of dates_to_filter
-    df_timezone = dates_to_filter.tz
-
-    if df_timezone is not None:  # If DataFrame's dates are timezone-aware
-        # If start_date is naive, localize it to the DataFrame's timezone
-        if start_date.tz is None:
-            start_date = start_date.tz_localize(df_timezone)
-        # If start_date is aware but different timezone, convert it
-        elif start_date.tz != df_timezone:
-            start_date = start_date.tz_convert(df_timezone)
-
-        # Repeat for end_date
-        if end_date.tz is None:
-            end_date = end_date.tz_localize(df_timezone)
-        elif end_date.tz != df_timezone:
-            end_date = end_date.tz_convert(df_timezone)
-    else:  # If DataFrame's dates are timezone-naive
-        # If start_date is aware, make it naive (or raise error, depending on desired behavior)
-        if start_date.tz is not None:
-            start_date = start_date.tz_localize(None)
-        # Repeat for end_date
-        if end_date.tz is not None:
-            end_date = end_date.tz_localize(None)
-
-    # Perform the filtering
-    mask = (dates_to_filter >= start_date) & (dates_to_filter <= end_date)
-
-    return df.loc[mask].copy()
+# --- Plot functions ---
 
 
+def create_map(center: list[float] = [-36, -71], zoom: int = 6) -> leafmap.Map:
+    """Creates a leafmap.Map object with initial settings."""
+    m = leafmap.Map(center=center, zoom=zoom)
+    m.add_basemap("CartoDB.DarkMatter")
+    return m
+
+
+def display_mask(m: leafmap.Map, mask_gdf: gpd.GeoDataFrame):
+    """Adds a GeoDataFrame mask to the map."""
+    m.add_gdf(
+        mask_gdf,
+        layer_name="Mask",
+        style={"color": "white", "weight": 2, "fillOpacity": 0.2},
+        info_mode="on_hover",
+    )
+    # Center the map on the mask's bounds
+    m.zoom_to_gdf(mask_gdf)
+
+
+def display_climate_data(m: leafmap.Map, tif_path: str):
+    """Adds a COG layer for climate data to the map."""
+    m.add_raster(
+        source=tif_path,
+        name="Climate Data (COG)",
+        palette="viridis",
+        rescale="0,5000",  # Rescale pixel values for better visualization
+    )
+
+
+def export_dataarray_to_tif(da: xr.DataArray) -> str:
+    """Converts a georeferenced DataArray to a temporary GeoTIFF and returns its path."""
+    da.rio.set_spatial_dims(
+        x_dim="longitude",
+        y_dim="latitude",
+        inplace=True,
+    )  # or "lon"/"lat" depending on your GRIB
+    da.rio.write_crs("EPSG:4326", inplace=True)
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
+    da.rio.to_raster(temp_file.name)
+    return temp_file.name
+
+
+def display_dataarray(m: leafmap.Map, da: xr.DataArray, rescale: str = "0,5000"):
+    """Converts and displays an xarray DataArray on the map."""
+    tif_path = export_dataarray_to_tif(da)
+    m.add_raster(
+        source=tif_path,
+        name="Climate Data",
+        palette="viridis",
+        rescale=rescale,
+    )
+
+
+def display_both(m: leafmap.Map, mask_gdf: gpd.GeoDataFrame, tif_path: str):
+    """Displays both the mask and the climate data."""
+    display_climate_data(m, tif_path)
+    display_mask(m, mask_gdf)
+
+
+# WARNING: Deprecated
 def process_dataset(
-    da: xr.Dataset,
+    ds: xr.Dataset,
     variables: list[str],
     path: str | Path,
 ) -> None:
     for var in variables:
-        filtered_da = da[[var]]
-
         temp_df = extract_regional_means(
-            da=filtered_da,
-            gdf=regions_chile,
+            _ds=ds,
+            _gdf=regions_chile,
+            data_variable=var,
             chunk_size={"latitude": 50, "longitude": 50},
         )
 
@@ -388,6 +297,9 @@ def convert_ssrd_to_watts(
         )
 
     return da_watts
+
+
+# --- Plotting Functions ---
 
 
 if __name__ == "__main__":
