@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -369,11 +370,14 @@ class TimeSeriesModeler:
 
         return self.cv_results
 
-    # def get_feature_importance(self) -> dict[str, float] | None:
-    #     """Get feature importance from the current strategy."""
-    #     if not self.is_fitted:
-    #         raise ValueError("Model must be fitted to get feature importance")
-    #     return self.strategy.get_feature_importance()
+    def get_feature_importance(self) -> dict[str, float] | None:
+        """Get feature importance from the current strategy."""
+        if not self.is_fitted:
+            raise ValueError("Model must be fitted to get feature importance")
+        if not self.strategy:
+            raise ValueError("First define a strategy model")
+
+        return self.strategy.get_feature_importance()
 
     # def get_shap_values(self, X: pd.DataFrame) -> dict[str, Any]:
     #     """Calculate SHAP values for model interpretability."""
@@ -453,12 +457,43 @@ def create_forecast_vs_actual(
         title=title,
         xaxis_title="Date",
         yaxis_title="Value",
-        legend=dict(x=0.01, y=0.99),
+        # legend=dict(x=0.01, y=0.99),
         # height=height,
         # width=width,
         # template="plotly_dark",
     )
 
+    return fig
+
+
+def plot_feature_importance(
+    importance_dict: dict[str, float],
+    top_n: int = 20,
+    title: str = "Feature Importance",
+):
+    """Plots feature importance from a dictionary using Plotly.
+
+    Parameters:
+    - importance_dict: Dict of feature importances {feature_name: importance_score}.
+    - top_n: Number of top features to show.
+    - title: Title of the plot.
+
+    Returns:
+    - fig: Plotly Figure.
+    """
+    df = pd.DataFrame(list(importance_dict.items()), columns=["Feature", "Importance"])
+    df = df.sort_values("Importance", ascending=False).head(top_n)
+
+    fig = px.bar(
+        df[::-1],  # Reverse to show highest on top
+        x="Importance",
+        y="Feature",
+        orientation="h",
+        title=title,
+        labels={"Importance": "Importance Score", "Feature": "Feature"},
+        height=400 + 20 * top_n,
+    )
+    fig.update_layout(template="plotly_white")
     return fig
 
 
