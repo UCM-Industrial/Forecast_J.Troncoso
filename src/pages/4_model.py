@@ -1,18 +1,28 @@
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
 from _util import read_csv_with_datetime
-from modeling import ModelFactory, TimeSeriesModeler, create_forecast_vs_actual
+from modeling import (
+    ModelFactory,
+    TimeSeriesModeler,
+    create_forecast_vs_actual,
+    plot_feature_importance,
+)
 
 st.title("Time Series Forecasting Suite")
 
 
 def init_session_state() -> None:
     """Initialize session state variables."""
-    for key, value in [("data", None), ("results", []), ("latest_run", None)]:
+    for key, value in [
+        ("data", None),
+        ("results", []),
+        ("latest_run", None),
+        ("config", None),
+        ("feature_importance", None),
+    ]:
         if key not in st.session_state:
             st.session_state[key] = value
 
@@ -48,20 +58,11 @@ def get_model_params(model_key: str) -> dict[str, Any]:
     return {}  # For Ridge, Lasso etc. that have no specific UI params
 
 
-def render_config_tab() -> dict[str, Any] | None:
-    st.header("Configuration")
-    uploaded_file = st.file_uploader("Upload CSV Data", type="csv")
-    if uploaded_file:
-        st.session_state.data = load_and_process_data(uploaded_file)
-
-    if st.session_state.data is None:
-        st.info("Please upload a CSV file to begin.")
-        return None
-
+def render_config() -> dict[str, Any] | None:
     data: pd.DataFrame = st.session_state.data
     numeric_cols = data.select_dtypes("number").columns.tolist()
 
-    st.subheader("1. Select Target & Features")
+    st.subheader("Select Target & Features")
     target_col = st.selectbox(
         "Target Variable",
         numeric_cols,
@@ -73,7 +74,7 @@ def render_config_tab() -> dict[str, Any] | None:
         default=[col for col in numeric_cols if col != target_col],
     )
 
-    st.subheader("2. Select Model")
+    st.subheader("Select Model")
     model_type = st.selectbox(
         "Model Type",
         [
@@ -87,18 +88,25 @@ def render_config_tab() -> dict[str, Any] | None:
         ],
     )
 
-    st.subheader("3. Set Parameters")
+    st.subheader("Set Parameters")
     params = get_model_params(model_type.lower().replace(" ", "-"))
 
-    st.subheader("4. Training Settings")
+    # WARNING: Some models does not need Cross validation or test split
+    st.subheader("Training Settings")
     cv_folds = st.slider(
         "Cross-Validation Folds",
-        min_value=2,
-        max_value=10,
-        value=5,
+        min_value=1,
+        max_value=5,
+        value=2,
+    )
+    test_size = st.slider(
+        "Test size",
+        min_value=0.1,
+        max_value=0.5,
+        value=0.2,
     )
 
-    if st.button("Train Model", type="primary", use_container_width=True):
+    if st.button("Train Model", use_container_width=True):
         if not target_col or not feature_cols:
             st.error("Please select a target and at least one feature.")
             return None
@@ -109,6 +117,7 @@ def render_config_tab() -> dict[str, Any] | None:
             "model_type": model_type,
             "params": params,
             "cv_folds": cv_folds,
+            "test_size": test_size,
         }
     return None
 
@@ -124,21 +133,7 @@ def render_data_overview(data: pd.DataFrame) -> None:
 
 def render_main_content() -> None:
     """Render the main page content using tabs."""
-    st.title("Time Series Forecasting Suite")
-
-    if st.session_state.data is None:
-        st.info("Upload data via the sidebar to get started.")
-        return
-
-    tab_list = ["Data Overview", "Latest Model Run", "Model Comparison"]
-    tab1, tab2, tab3 = st.tabs(tab_list)
-
-    with tab1:
-        render_data_overview(st.session_state.data)
-    with tab2:
-        render_latest_run()
-    with tab3:
-        render_model_comparison()
+    ...
 
 
 def render_latest_run() -> None:
@@ -155,24 +150,12 @@ def render_latest_run() -> None:
     st.metric("CV R² Score", f"{run_info['cv_results']['r2']:.4f}")
 
     # Plot predictions
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=run_info["df"].index, y=run_info["df"]["actual"], name="Actual"),
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=run_info["df"].index,
-            y=run_info["df"]["predicted"],
-            name="Predicted",
-            line=dict(dash="dash"),
-        ),
-    )
-    fig.update_layout(
-        title="Forecast vs. Actuals",
-        xaxis_title="Date",
-        yaxis_title="Value",
-    )
+    fig = create_forecast_vs_actual(run_info["df"], "actual", "predicted")
     st.plotly_chart(fig, use_container_width=True)
+
+    fig = plot_feature_importance(st.session_state.feature_importance)
+    st.plotly_chart(fig)
+    # Feature importance
 
 
 def render_model_comparison() -> None:
@@ -207,15 +190,25 @@ def run_training_session(config: dict) -> None:
             )
             modeler = TimeSeriesModeler(strategy)
 
-            X = config["data"][config["features"]]
-            y = config["data"][config["target"]]
+            split_point = int(len(config["data"]) * (1 - config["test_size"]))
+            train = config["data"].iloc[:split_point]
+            test = config["data"].iloc[split_point:]
+
+            X_train = train[config["features"]]
+            y_train = train[config["target"]]
+
+            X_test = test[config["features"]]
+            y_test = test[config["target"]]
 
             # Cross-validate and then fit on all data
-            cv_results = modeler.cross_validate(X, y, config["cv_folds"])
-            modeler.fit(X, y)
-            predictions = modeler.predict(X)
+            cv_results = modeler.cross_validate(X_train, y_train, config["cv_folds"])
+            modeler.fit(X_train, y_train)
+
+            predictions = modeler.predict(X_test)
 
             # Store results for comparison table
+            st.session_state.feature_importance = modeler.get_feature_importance()
+
             run_result = {"model_type": config["model_type"], **cv_results}
             st.session_state.results.append(run_result)
 
@@ -224,8 +217,8 @@ def run_training_session(config: dict) -> None:
                 "model_type": config["model_type"],
                 "cv_results": cv_results,
                 "df": pd.DataFrame(
-                    {"actual": y, "predicted": predictions},
-                    index=X.index,
+                    {"actual": y_test, "predicted": predictions},
+                    index=X_test.index,
                 ),
             }
             st.success(f"Model {config['model_type']} trained successfully!")
@@ -236,153 +229,38 @@ def run_training_session(config: dict) -> None:
             st.error(f"An unexpected error occurred during training: {e}")
 
 
-def train_model(
-    model_type: str,
-    params: dict[str, Any],
-    features: pd.DataFrame,
-    target: pd.Series,
-    cv_folds: int,
-) -> TimeSeriesModeler:
-    model_type = model_type.lower()
-
-    modeler = TimeSeriesModeler()
-    strategy = ModelFactory.create_strategy(model_type=model_type, **params)
-
-    modeler.set_strategy(strategy)
-    modeler.cross_validate(X=features, y=target, cv_folds=cv_folds)
-    modeler.fit(X=features, y=target)
-    return modeler
-
-
-def render_training_model(data: pd.DataFrame):
-    numeric_columns = data.select_dtypes(
-        include=[np.number],
-    ).columns.tolist()
-    target_column: str = st.selectbox(
-        "Select target variable",
-        numeric_columns,
-        help="Chose the variable to predict",
-    )
-
-    feature_columns: list[str] = st.multiselect(
-        "Select feature variables",
-        [col for col in numeric_columns if col != target_column],
-        default=[col for col in numeric_columns if col != target_column],
-        help="Chose the input features for the model",
-    )
-    if target_column and feature_columns:
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            st.markdown("#### Model Selection")
-            model_type = st.selectbox(
-                "Choose model type:",
-                ["XGBoost", "LightGBM", "CatBoost", "ARIMA", "Holt-Winters"],
-                help="Select the machine learning algorithm",
-            )
-
-            # Model parameters based on selection
-            st.markdown("#### Model Parameters")
-
-            params = None
-
-            if model_type in ["XGBoost", "LightGBM", "CatBoost"]:
-                params = render_tree_model_params()
-            elif model_type == "ARIMA":
-                params = render_arima_params()
-            elif model_type == "Holt-Winters":
-                params = render_holt_winters_params()
-
-        with col2:
-            st.markdown("#### Cross-Validation Settings")
-            cv_folds = st.slider("Number of CV folds", 3, 10, 5)
-            test_size_pct = st.slider("Test size (%)", 10, 40, 20)
-
-            st.markdown("#### Training Options")
-            perform_grid_search = st.checkbox(
-                "Perform grid search",
-                help="Automatically tune hyperparameters",
-            )
-
-            if perform_grid_search and model_type in [
-                "XGBoost",
-                "LightGBM",
-                "CatBoost",
-            ]:
-                st.markdown("**Grid Search Parameters:**")
-                n_est_range = st.slider("N_estimators range", 50, 200)
-                depth_range = st.slider("Max_depth range", 3, 8)
-
-            submitted = st.button("Train Model", type="primary")
-        if submitted and target_column and feature_columns:
-            with st.spinner("Training model..."):
-                if not params:
-                    raise ValueError("Params is empty")
-
-                modeler = train_model(
-                    model_type,
-                    params,
-                    data[feature_columns],
-                    data[target_column],
-                    cv_folds,
-                )
-                st.session_state.model = modeler
-                predictions = modeler.predict(data[feature_columns])
-                st.session_state.predictions = pd.Series(predictions, index=data.index)
-
-        if st.session_state.model and st.session_state.predictions is not None:
-            st.subheader("Predictions")
-            pred_df = pd.DataFrame(
-                {
-                    "Actual": data[target_column],
-                    "Predicted": st.session_state.predictions,
-                },
-            )
-            fig = create_forecast_vs_actual(
-                pred_df,
-                actual_col="Actual",
-                predicted_col="Predicted",
-            )
-            st.plotly_chart(fig)
-
-
-def main():
-    init_session_state()
-    st.header("Upload Data")
-    uploaded_csv = st.file_uploader(
-        "Upload Training Data",
-        type="csv",
-        help="Upload the time series data with features and target variable",
-    )
-
-    if uploaded_csv:
-        data = load_and_process_data(uploaded_csv)
-        st.session_state.data = data
-        st.success("Training data uploaded")
-
-    if st.session_state.data is not None:
-        tab1, tab2 = st.tabs(["Data Overview", "Model Training"])
-
-        with tab1:
-            render_data_overview(data=st.session_state.data)
-
-        with tab2:
-            render_training_model(data=st.session_state.data)
-
-
-def main_2() -> None:
+def main() -> None:
     """Main function to run the Streamlit app."""
     init_session_state()
 
     with st.sidebar:
-        config = render_config_tab()
+        uploaded_file = st.file_uploader("Upload CSV Data", type="csv")
+        if uploaded_file:
+            st.session_state.data = load_and_process_data(uploaded_file)
+            st.success("Data loaded successfully")
 
-    if config:
-        run_training_session(config)
-        st.rerun()
+        if st.session_state.data is None:
+            st.info("Please upload a CSV file to begin.")
+            return None
 
-    render_main_content()
+    if st.session_state.data is None:
+        st.info("Upload data via the sidebar to get started.")
+        return
+
+    tab_list = ["Configuration", "Results", "Performance comparasion"]
+    tab1, tab2, tab3 = st.tabs(tab_list)
+
+    with tab1:
+        st.session_state.config = render_config()
+
+        if st.session_state.config:
+            run_training_session(st.session_state.config)
+    with tab2:
+        render_latest_run()
+    with tab3:
+        render_model_comparison()
+        # st.rerun()
 
 
 if __name__ == "__main__":
-    main_2()
+    main()
