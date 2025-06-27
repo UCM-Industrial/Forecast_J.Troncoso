@@ -9,18 +9,20 @@ import streamlit as st
 import xarray as xr
 
 from preprocessor import (
-    create_cyclical_features,
     create_map,
     display_both,  # noqa: F401
     display_climate_data,  # noqa: F401
     display_dataarray,
     display_mask,
     extract_regional_means,
+    load_dataset,
 )
 
 warnings.filterwarnings("ignore")
-# Configure page
-# st.set_page_config(page_title="Geospatial Data Processor", page_icon="🗺️", layout="wide")
+
+st.session_state.engine = None
+st.session_state.coord_lat = "lat"
+st.session_state.coord_lon = "lon"
 
 
 # Cache data loading functions
@@ -34,7 +36,7 @@ def load_shapefile(shapefile_path: str) -> gpd.GeoDataFrame:
 def load_grib_metadata(grib_path: str) -> dict:
     """Load GRIB file metadata without loading full dataset."""
     try:
-        with xr.open_dataset(grib_path, engine="cfgrib") as ds:
+        with load_grib_dataset(grib_path) as ds:
             metadata = {
                 "data_vars": list(ds.data_vars.keys()),
                 "coords": list(ds.coords.keys()),
@@ -51,7 +53,8 @@ def load_grib_metadata(grib_path: str) -> dict:
 @st.cache_data
 def load_grib_dataset(grib_path: str) -> xr.Dataset:
     """Load and cache GRIB dataset."""
-    return xr.open_dataset(grib_path, engine="cfgrib")
+    ds = load_dataset(grib_path)
+    return ds
 
 
 @st.cache_data
@@ -69,13 +72,15 @@ def process_regional_means(
     gdf = load_shapefile(shapefile_path)
 
     return extract_regional_means(
-        ds,
-        gdf,
-        data_variable,
-        time_coord,
-        chunk_size,
-        column_names,
-        output_timezone,
+        _ds=ds,
+        _gdf=gdf,
+        data_variable=data_variable,
+        latitude=st.session_state.coord_lat,
+        longitude=st.session_state.coord_lon,
+        time_coord=time_coord,
+        chunk_size=chunk_size,
+        column_names=column_names,
+        # output_timezone,
     )
 
 
@@ -88,11 +93,12 @@ def validate_file_path(file_path: str, file_type: str) -> tuple[bool, str]:
     if not path.exists():
         return False, f"File does not exist: {file_path}"
 
-    if file_type == "GRIB" and path.suffix.lower() not in [
+    if file_type == "Geospatial Dataset" and path.suffix.lower() not in [
         ".grib",
         ".grib2",
         ".grb",
         ".grb2",
+        ".nc",
     ]:
         return False, "File should have a GRIB extension (.grib, .grib2, .grb, .grb2)"
 
@@ -195,7 +201,6 @@ def render_shapefile_info(shapefile_path: str):
         # Preview data
         with st.expander("📋 Data Preview", expanded=False):
             st.dataframe(gdf.drop("geometry", axis=1).head())
-
         return gdf.columns.tolist()
 
     except Exception as e:
@@ -209,7 +214,7 @@ def render_visualization_section(
     data_vars: list[str],
 ):
     """Render data visualization section."""
-    st.header("📈 Data Visualization")
+    st.header("Data Visualization")
 
     # Variable selection
     selected_var = st.selectbox("Select data variable to visualize:", data_vars)
@@ -219,7 +224,7 @@ def render_visualization_section(
 
     # col1, col2 = st.columns(2)
 
-    st.subheader("🗺️ Interactive Leafmap Viewer")
+    st.subheader("Interactive Leafmap Viewer")
     if st.button("Visualize on Map", key="leafmap_plot"):
         try:
             with st.spinner("Generating interactive map..."):
@@ -232,7 +237,12 @@ def render_visualization_section(
                 )
 
                 m = create_map()
-                display_dataarray(m, da)
+                display_dataarray(
+                    m,
+                    da,
+                    lat_name=st.session_state.lat_name,
+                    lon_name=st.session_state.lon_name,
+                )
                 display_mask(m, gdf)
                 m.to_streamlit(height=600)
         except Exception as e:
@@ -246,7 +256,7 @@ def render_processing_section(
     shapefile_cols: list[str],
 ):
     """Render regional mean processing section."""
-    st.header("⚙️ Regional Mean Processing")
+    st.header("Regional Mean Processing")
 
     # Processing parameters
     col1, col2, col3 = st.columns(3)
@@ -288,12 +298,15 @@ def render_processing_section(
             max_value=200,
         )
 
-    chunk_size = {"latitude": lat_chunk, "longitude": lon_chunk}
+    chunk_size = {
+        st.session_state.coord_lat: lat_chunk,
+        st.session_state.coord_lon: lon_chunk,
+    }
 
     # Processing section
-    st.subheader("🚀 Run Processing")
+    st.subheader("Run Processing")
 
-    if st.button("🔄 Process Regional Means", type="primary"):
+    if st.button("Process Regional Means", type="primary"):
         process_data(
             grib_path,
             shapefile_path,
@@ -337,10 +350,10 @@ def process_data(
             progress_bar.progress(100)
             status_text.text("Processing complete!")
 
-        st.success("✅ Regional means calculated successfully!")
+        st.success("Regional means calculated successfully!")
 
         # Display results
-        st.subheader("📊 Results")
+        st.subheader("Results")
 
         col1, col2 = st.columns([2, 1])
 
@@ -350,7 +363,7 @@ def process_data(
             )
 
             # Preview results
-            with st.expander("📋 Data Preview", expanded=True):
+            with st.expander("Data Preview", expanded=True):
                 st.dataframe(df.head(10))
 
         with col2:
@@ -359,7 +372,7 @@ def process_data(
 
         # Time series visualization
         if len(df.columns) <= 17:  # Only plot if reasonable number of regions
-            st.subheader("📈 Time Series Visualization")
+            st.subheader("Time Series Visualization")
             fig = px.line(df, title="Regional Mean Time Series")
             fig.update_layout(xaxis_title="Time", yaxis_title=f"{data_variable}")
             st.plotly_chart(fig, use_container_width=True)
@@ -378,11 +391,8 @@ def process_data(
 
 def render_download_section(df: pd.DataFrame):
     """Render download options for processed data."""
-    st.subheader("💾 Download Results")
+    st.subheader("Download Results")
 
-    # col1, col2, col3 = st.columns(3)
-
-    # with col1:
     csv_data = df.to_csv().encode("utf-8")
     st.download_button(
         "Download CSV",
@@ -390,73 +400,6 @@ def render_download_section(df: pd.DataFrame):
         file_name=f"{st.session_state.data_variable}_means.csv",
         mime="text/csv",
     )
-
-    # with col2:
-    #     # Create an in-memory Excel file using BytesIO
-    #     df_export = df.copy()
-    #
-    #     if df_export.index.tz is not None:
-    #         df_export.index = df_export.index.tz_localize(None)
-    #     # Remove timezone from datetime columns if present
-    #     datetime_cols = df_export.select_dtypes(include=["datetime64[ns, UTC]"]).columns
-    #
-    #     for col in datetime_cols:
-    #         df_export[col] = df_export[col].dt.tz_localize(None)
-    #     excel_buffer = BytesIO()
-    #     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-    #         df.to_excel(writer, sheet_name=f"{st.session_state.data_variable}_Means")
-    #
-    #     # Important: Reset buffer position to start for reading
-    #     excel_buffer.seek(0)
-    #
-    #     # Provide download button
-    #     st.download_button(
-    #         label="Download Excel",
-    #         data=excel_buffer,
-    #         file_name=f"{st.session_state.data_variable}_Means.xlsx",
-    #         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    #     )
-
-    # with col3:
-    #     st.metric("Total Data Points", len(df) * len(df.columns))
-
-
-def render_cyclical_features_section(df: pd.DataFrame):
-    """Render optional cyclical features section."""
-    st.subheader("🔄 Optional: Add Cyclical Features")
-
-    with st.expander("Add cyclical time features", expanded=False):
-        st.write("Add cyclical encoding for time-based features (useful for ML models)")
-
-        features_options = ["hour", "day", "month", "dayofweek"]
-        selected_features = st.multiselect(
-            "Select features to encode:",
-            features_options,
-            default=["hour", "month"],
-        )
-
-        if selected_features and st.button("Add Cyclical Features"):
-            try:
-                df_with_features = create_cyclical_features(
-                    df,
-                    features=selected_features,
-                )
-                st.success("✅ Cyclical features added!")
-
-                with st.expander("Preview with cyclical features"):
-                    st.dataframe(df_with_features.head())
-
-                # Download enhanced data
-                enhanced_csv = df_with_features.to_csv().encode("utf-8")
-                st.download_button(
-                    "Download Enhanced CSV",
-                    enhanced_csv,
-                    file_name="regional_means_with_cyclical_features.csv",
-                    mime="text/csv",
-                )
-
-            except Exception as e:
-                st.error(f"Error adding cyclical features: {e}")
 
 
 def main():
@@ -482,13 +425,20 @@ def main():
     with col1:
         data_vars = render_grib_info(grib_path)
 
+        st.session_state.lon_name = st.text_input(
+            "Set longitude coord name",
+            value="longitude",
+        )
+        st.session_state.lat_name = st.text_input(
+            "Set latitude coord name",
+            value="latitude",
+        )
     with col2:
         shapefile_cols = render_shapefile_info(shapefile_path)
 
     if not data_vars or not shapefile_cols:
         return
 
-    # Add separator
     st.divider()
 
     # Visualization section

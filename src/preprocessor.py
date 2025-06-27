@@ -3,15 +3,45 @@ from pathlib import Path
 
 import geopandas as gpd
 import leafmap.foliumap as leafmap
-import numpy as np
 import pandas as pd
 import regionmask
 import xarray as xr
 
 
+def load_dataset(filepath: str | Path, **kwargs) -> xr.Dataset:
+    """Load a dataset from a NetCDF or GRIB file.
+
+    Args:
+        filepath: Path to the input file (.nc, .grib, .grb, .grb2).
+        **kwargs: Additional keyword arguments for xarray.open_dataset.
+
+    Returns:
+        An xarray.Dataset object.
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath}")
+
+    # Determine engine based on file extension
+    if filepath.suffix == ".nc":
+        engine = kwargs.pop("engine", "netcdf4")
+    elif filepath.suffix in [".grib", ".grb", ".grb2", ".grib2"]:
+        engine = kwargs.pop("engine", "cfgrib")
+    else:
+        raise ValueError(
+            f"Unsupported file extension: '{filepath.suffix}'. "
+            "Please provide a .nc or .grib file.",
+        )
+
+    return xr.open_dataset(filepath, engine=engine, **kwargs)
+
+
 def mask_regions(
     _da: xr.DataArray,
     _gdf: gpd.GeoDataFrame | None,
+    *,
+    lon_name: str = "longitude",
+    lat_name: str = "latitude",
     **kwargs,
 ) -> xr.DataArray:
     """Creates a mask for the given regions."""
@@ -27,14 +57,19 @@ def mask_regions(
     kwargs.setdefault("overlap", False)
     regions = regionmask.from_geopandas(mask_gdf, **kwargs)
 
-    return regions.mask(_da.longitude, _da.latitude)
+    print(regions.mask(_da[lon_name], _da[lat_name]))
+
+    return regions.mask(_da[lon_name], _da[lat_name])
 
 
 def extract_regional_means(
     _ds: xr.Dataset,
     _gdf: gpd.GeoDataFrame,
     data_variable: str,
+    *,
     time_coord: str | None = None,
+    latitude: str = "latitude",
+    longitude: str = "longitude",
     chunk_size: dict[str, int] | None = {"latitude": 50, "longitude": 50},
     column_names: str = "Region",
     output_timezone: str = "America/Santiago",
@@ -54,9 +89,24 @@ def extract_regional_means(
     # Handle time coordinates
     da = _standardize_time_coord(da, custom_time=time_coord)
 
+    # Clean GeoDataFrame to ensure mask and names align correctly
+    # clean_gdf = _gdf.dropna(subset=[column_names]).reset_index(drop=True)
+    # if clean_gdf.empty:
+    #     raise ValueError(
+    #         f"No valid regions left after dropping NaNs from '{column_names}'.",
+    #     )
+
     # Calculate regional means
-    mask = mask_regions(da, _gdf, names=column_names)
-    regional_means = da.groupby(mask).mean(dim=["latitude", "longitude"])
+    mask = mask_regions(
+        da,
+        _gdf,
+        names=column_names,
+        lat_name=latitude,
+        lon_name=longitude,
+    )
+    print("Mask \n", mask)
+    regional_means = da.groupby(mask).mean(dim=[latitude, longitude])
+    print("Reginoal Means\n", regional_means)
 
     # NOTE: This is a temporal fix
     if "isobaricInhPa" in regional_means.dims:
@@ -78,109 +128,76 @@ def extract_regional_means(
     return df.sort_index()
 
 
-def create_cyclical_features(
-    df: pd.DataFrame,
-    datetime_col: str | None = None,
-    features: list[str] = ["hour", "day", "month"],
-):
-    """Apply cyclical encoding to datetime features."""
-    temp_df = df.copy()
-
-    # Determine the datetime series to use
-    if datetime_col:
-        # Use specified column
-        if datetime_col not in temp_df.columns:
-            raise ValueError(f"Column '{datetime_col}' not found in DataFrame")
-        df_series = temp_df[datetime_col]
-    else:
-        # Use index as datetime source
-        if not isinstance(temp_df.index, pd.DatetimeIndex):
-            raise ValueError(
-                "When datetime_col is None, DataFrame index must be a DatetimeIndex",
-            )
-        df_series = temp_df.index.to_series()
-
-    # Ensure the series is datetime type
-    if not pd.api.types.is_datetime64_any_dtype(df_series):
-        try:
-            df_series = pd.to_datetime(df_series)
-        except Exception as e:
-            raise ValueError(f"Cannot convert to datetime: {e}")
-
-    # Mapping of features to their maximum values for cyclical encoding
-    max_vals = {
-        "hour": 24,
-        "day": 31,
-        "month": 12,
-        "dayofweek": 7,
-    }
-
-    for feature in features:
-        if feature not in max_vals:
-            print(f"Warning: Feature '{feature}' not recognized. Skipping.")
-            continue
-
-        # Extract the appropriate datetime component
-        if feature == "hour":
-            values = df_series.dt.hour
-        elif feature == "day":
-            values = df_series.dt.day
-        elif feature == "month":
-            values = df_series.dt.month
-        elif feature == "dayofweek":
-            values = df_series.dt.dayofweek
-        else:
-            raise ValueError
-
-        # Apply cyclical encoding: sin and cos transformations
-        max_val = max_vals[feature]
-        temp_df[f"{feature}_sin"] = np.sin(2 * np.pi * values / max_val)
-        temp_df[f"{feature}_cos"] = np.cos(2 * np.pi * values / max_val)
-
-    return temp_df
-
-
 def _standardize_time_coord(
     da: xr.DataArray,
-    custom_time: str | None,
+    dataset: xr.Dataset | None = None,
+    custom_time: str | None = None,
+    warn_only: bool = False,
 ) -> xr.DataArray:
-    """Standardize time coordinate to 'datetime'."""
-    # Custom time coordinate
-    if custom_time and custom_time in da.dims:
-        return da.rename({custom_time: "datetime"})
-
-    # Forecast data (time + step)
-    if "step" in da.dims and "time" in da.dims:
-        if "valid_time" not in da.coords:
-            raise ValueError("Missing 'valid_time' coordinate for forecast data")
-
-        da_stacked = da.stack(forecast_time=("time", "step"))
-        valid_times = da.valid_time.stack(forecast_time=("time", "step"))
-        da = da_stacked.assign_coords(datetime=valid_times).swap_dims(
-            {"forecast_time": "datetime"},
-        )
-
-        # Clean up old coordinates
-        drop_coords = ["forecast_time"]
-
-        coords_to_check = ["time", "step"]
-        drop_coords.extend(
-            [coord for coord in coords_to_check if coord in da.coords],
-        )
-        da = da.drop_vars(drop_coords)
-
-    # Standard time coordinate
-    elif "time" in da.dims:
-        da = da.rename({"time": "datetime"})
-
-    # Already standardized
-    elif "datetime" in da.dims:
-        pass
-
+    """Standardize time coordinate to 'datetime', using da or dataset context."""
+    # Use dataset context to look for time coordinates if missing in da
+    if dataset is not None:
+        da_coords = set(da.coords) | set(dataset.coords)
     else:
-        raise ValueError(f"No recognized time coordinate found in {list(da.dims)}")
+        da_coords = set(da.coords)
 
-    return da
+    dims = list(da.dims)
+
+    # Case 1: Custom time coordinate
+    if custom_time and custom_time in da_coords:
+        if custom_time in da.coords:
+            return da.rename({custom_time: "datetime"})
+        else:
+            return da.assign_coords(datetime=dataset[custom_time])
+
+    # Case 2: Forecast-style
+    if {"time", "step", "valid_time"}.issubset(da_coords):
+        # Only apply if dimensions allow stacking
+        if "time" in dims and "step" in dims:
+            da_stacked = da.stack(forecast_time=("time", "step"))
+            valid_times = (
+                dataset["valid_time"].stack(forecast_time=("time", "step"))
+                if dataset is not None
+                else da["valid_time"].stack(forecast_time=("time", "step"))
+            )
+            da = da_stacked.assign_coords(datetime=valid_times).swap_dims(
+                {"forecast_time": "datetime"},
+            )
+            drop_coords = ["forecast_time"] + [
+                c for c in ("time", "step") if c in da.coords
+            ]
+            return da.drop_vars([c for c in drop_coords if c in da.coords])
+
+        # If not in dims, maybe apply valid_time directly
+        if "valid_time" in dims:
+            return da.rename({"valid_time": "datetime"})
+
+        if "valid_time" in da.coords:
+            return da.assign_coords(datetime=da["valid_time"])
+
+        if dataset is not None and "valid_time" in dataset:
+            return da.assign_coords(datetime=dataset["valid_time"])
+
+    # Case 3: Simple time dimension
+    if "time" in dims:
+        return da.rename({"time": "datetime"})
+
+    # Case 4: Already standardized
+    if "datetime" in dims or "datetime" in da.coords:
+        return da
+
+    # Case 5: Cannot resolve
+    msg = (
+        f"⛔ No recognized time coordinate found.\n"
+        f"  - dims: {dims}\n"
+        f"  - inferred coords: {sorted(da_coords)}"
+    )
+    if warn_only:
+        import warnings
+
+        warnings.warn(msg)
+        return da
+    raise ValueError(msg)
 
 
 # --- Plot functions ---
@@ -215,11 +232,15 @@ def display_climate_data(m: leafmap.Map, tif_path: str):
     )
 
 
-def export_dataarray_to_tif(da: xr.DataArray) -> str:
+def export_dataarray_to_tif(
+    da: xr.DataArray,
+    lat_name: str = "latitude",
+    lon_name: str = "longitude",
+) -> str:
     """Converts a georeferenced DataArray to a temporary GeoTIFF and returns its path."""
     da.rio.set_spatial_dims(
-        x_dim="longitude",
-        y_dim="latitude",
+        x_dim=lon_name,
+        y_dim=lat_name,
         inplace=True,
     )  # or "lon"/"lat" depending on your GRIB
     da.rio.write_crs("EPSG:4326", inplace=True)
@@ -229,9 +250,19 @@ def export_dataarray_to_tif(da: xr.DataArray) -> str:
     return temp_file.name
 
 
-def display_dataarray(m: leafmap.Map, da: xr.DataArray, rescale: str = "0,5000"):
+def display_dataarray(
+    m: leafmap.Map,
+    da: xr.DataArray,
+    rescale: str = "0,5000",
+    lat_name: str = "latitude",
+    lon_name: str = "longitude",
+):
     """Converts and displays an xarray DataArray on the map."""
-    tif_path = export_dataarray_to_tif(da)
+    tif_path = export_dataarray_to_tif(
+        da,
+        lat_name=lat_name,
+        lon_name=lon_name,
+    )
     m.add_raster(
         source=tif_path,
         name="Climate Data",
@@ -297,9 +328,6 @@ def convert_ssrd_to_watts(
         )
 
     return da_watts
-
-
-# --- Plotting Functions ---
 
 
 if __name__ == "__main__":
