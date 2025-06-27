@@ -11,7 +11,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
@@ -34,19 +35,14 @@ class ModelStrategy(Protocol):
 
     def requires_scaling(self) -> bool: ...
 
-    def supports_shap(self) -> bool: ...
+    def supports_grid_search(self) -> bool: ...
 
 
 class TreeBasedStrategy(ModelStrategy):
     """Base strategy for tree-based models (XGBoost, LightGBM, CatBoost)."""
 
     def __init__(self, model_class: type, **params: Any) -> None:
-        """Initialize the tree-based strategy.
-
-        Args:
-            model_class: The tree-based model class (e.g., xgboost.XGBRegressor).
-            **params: Model-specific parameters.
-        """
+        """Initialize the tree-based strategy."""
         self.model_class = model_class
         self.params = params or {"random_state": 12}
         self.model = self.model_class(**self.params)
@@ -73,7 +69,7 @@ class TreeBasedStrategy(ModelStrategy):
     def requires_scaling(self) -> bool:
         return False
 
-    def supports_shap(self) -> bool:
+    def supports_grid_search(self) -> bool:
         return True
 
 
@@ -81,12 +77,7 @@ class LinearModelStrategy(ModelStrategy):
     """Base strategy for linear models that require scaling."""
 
     def __init__(self, model_class, **params) -> None:
-        """Initialize the linear model strategy.
-
-        Args:
-            model_class: The linear model class (e.g., sklearn.linear_model.Ridge).
-            **params: Model-specific parameters.
-        """
+        """Initialize the linear model strategy."""
         self.model_class = model_class
         self.params = params or {}
         self.model = self.model_class(**self.params)
@@ -107,13 +98,18 @@ class LinearModelStrategy(ModelStrategy):
     def get_feature_importance(self) -> dict[str, float] | None:
         if not self.is_fitted or not self.feature_names:
             return None
-        importance = np.abs(self.model.coef_)
+        # Coeficientes pueden ser multidimensionales (e.g., para regresión multiclase)
+        importance = (
+            np.abs(self.model.coef_).mean(axis=0)
+            if self.model.coef_.ndim > 1
+            else np.abs(self.model.coef_)
+        )
         return dict(zip(self.feature_names, importance))
 
     def requires_scaling(self) -> bool:
         return True
 
-    def supports_shap(self) -> bool:
+    def supports_grid_search(self) -> bool:
         return True
 
 
@@ -121,12 +117,7 @@ class UnivariateTimeSeriesStrategy(ModelStrategy):
     """Base strategy for univariate time series models (Holt-Winters, ARIMA)."""
 
     def __init__(self, model_class, **params) -> None:
-        """Initialize the univariate strategy.
-
-        Args:
-            model_class: The model class (e.g., statsmodels.tsa.holtwinters.ExponentialSmoothing).
-            **params: Model-specific parameters.
-        """
+        """Initialize the univariate strategy."""
         self.model_class = model_class
         self.model = None
         self.is_fitted = False
@@ -145,57 +136,14 @@ class UnivariateTimeSeriesStrategy(ModelStrategy):
         return np.array(forecast)
 
     def get_feature_importance(self) -> dict[str, float] | None:
-        return None
+        return None  # Not applicable for these models
 
     def requires_scaling(self) -> bool:
         return False
 
-    def supports_shap(self) -> bool:
+    def supports_grid_search(self) -> bool:
+        # GridSearchCV is not directly compatible with statsmodels API
         return False
-
-
-class CustomModelStrategy(ModelStrategy):
-    """Strategy for custom user-provided models."""
-
-    def __init__(self, model, **params) -> None:
-        """Initialize with custom model.
-
-        Args:
-            model: Pre-instantiated model object.
-            **params: Additional parameters (unused but kept for compatibility).
-        """
-        self.model = model
-        self.is_fitted = False
-        self.feature_names = None
-
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "CustomModelStrategy":
-        self.feature_names = X.columns.tolist()
-        self.model.fit(X, y)
-        self.is_fitted = True
-        return self
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        if not self.is_fitted:
-            raise ValueError("Model must be fitted before prediction")
-        return self.model.predict(X)
-
-    def get_feature_importance(self) -> dict[str, float] | None:
-        if not self.is_fitted or not self.feature_names:
-            return None
-        if hasattr(self.model, "feature_importances_"):
-            return dict(zip(self.feature_names, self.model.feature_importances_))
-        elif hasattr(self.model, "coef_"):
-            return dict(zip(self.feature_names, np.abs(self.model.coef_)))
-        return None
-
-    def requires_scaling(self) -> bool:
-        # Conservative approach - assume scaling needed unless it's a tree model
-        model_name = self.model.__class__.__name__.lower()
-        tree_models = ["xgb", "lgb", "catboost", "randomforest", "extratrees"]
-        return not any(tree in model_name for tree in tree_models)
-
-    def supports_shap(self) -> bool:
-        return hasattr(self.model, "predict")
 
 
 class ModelFactory:
@@ -257,33 +205,38 @@ class ModelFactory:
 class TimeSeriesModeler:
     """Main interface for time-series modeling with strategy pattern."""
 
-    def __init__(self, strategy: ModelStrategy | None = None) -> None:
-        """Initialize modeler with optional strategy."""
+    def __init__(self, strategy: ModelStrategy) -> None:
+        """Initialize modeler with a strategy."""
         self.strategy = strategy
         self.scaler = None
         self.is_fitted: bool = False
-        self.cv_results: dict[str, Any] | None = None
+        self.cv_results_: pd.DataFrame | None = None
 
-    # def set_strategy(self, strategy: ModelStrategy) -> "TimeSeriesModeler":
-    #     """Set the modeling strategy."""
-    #     self.strategy = strategy
-    #     self.is_fitted = False  # Reset fitted status when strategy changes
-    #     return self
+    @staticmethod
+    def evaluate_regression_metrics(
+        y_true: np.ndarray | pd.Series,
+        y_pred: np.ndarray | pd.Series,
+    ) -> dict[str, float]:
+        """Calculates and returns a dictionary of standard regression metrics.
+
+        This is a static method, making it a reusable utility function.
+        """
+        mse = mean_squared_error(y_true, y_pred)
+        mae = mean_absolute_error(y_true, y_pred)
+        r2 = r2_score(y_true, y_pred)
+
+        return {"mse": mse, "mae": mae, "r2": r2}
 
     def _preprocess(
         self,
-        X: pd.DataFrame,
-        y: pd.Series | None = None,
+        X: pd.DataFrame,  # noqa: N803
         fit_scaler: bool = True,
-    ) -> tuple[pd.DataFrame, pd.Series | None]:
+    ) -> pd.DataFrame:
         """Preprocess data with optional scaling."""
-        if not self.strategy:
-            raise ValueError("Strategy must be set before preprocessing")
-
         X_processed = X.copy()
 
-        # Apply scaling if needed
         if self.strategy.requires_scaling():
+            print(self.strategy, "requires_scaling")
             if fit_scaler:
                 self.scaler = StandardScaler()
                 X_processed = pd.DataFrame(
@@ -291,21 +244,21 @@ class TimeSeriesModeler:
                     columns=X.columns,
                     index=X.index,
                 )
-            elif self.scaler is not None:
+            elif self.scaler:
                 X_processed = pd.DataFrame(
                     self.scaler.transform(X_processed),
                     columns=X.columns,
                     index=X.index,
                 )
+        return X_processed
 
-        return X_processed, y
-
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "TimeSeriesModeler":
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+    ) -> "TimeSeriesModeler":
         """Fit the model with preprocessing."""
-        if not self.strategy:
-            raise ValueError("Strategy must be set before fitting")
-
-        X_processed, _ = self._preprocess(X, y, fit_scaler=True)
+        X_processed = self._preprocess(X=X, fit_scaler=True)
         self.strategy.fit(X_processed, y)
         self.is_fitted = True
         return self
@@ -314,8 +267,72 @@ class TimeSeriesModeler:
         """Make predictions with preprocessing."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before prediction")
-        X_processed, _ = self._preprocess(X, fit_scaler=False)
+        X_processed = self._preprocess(X, fit_scaler=False)
         return self.strategy.predict(X_processed)
+
+    def fit_with_grid_search(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        param_grid: dict[str, Any],
+        cv: int = 5,
+        scoring: str = "neg_mean_squared_error",
+    ) -> "TimeSeriesModeler":
+        """Perform grid search, update and fit the best model."""
+        if not self.strategy.supports_grid_search():
+            raise TypeError(
+                f"The current strategy ({self.strategy.__class__.__name__}) does not support GridSearchCV.",
+            )
+
+        tscv = TimeSeriesSplit(n_splits=cv)
+
+        # Create a pipeline to handle scaling within each CV fold
+        pipeline_steps = []
+        if self.strategy.requires_scaling():
+            self.scaler = StandardScaler()
+            pipeline_steps.append(("scaler", self.scaler))
+
+        # Use a fresh model instance for the grid search
+        initial_model = self.strategy.model_class(**self.strategy.params)
+        pipeline_steps.append(("model", initial_model))
+
+        pipeline = Pipeline(steps=pipeline_steps)
+
+        # Adjust param_grid keys to match pipeline step names
+        grid_search_params = {f"model__{k}": v for k, v in param_grid.items()}
+
+        # Setup and run GridSearchCV
+        grid_search = GridSearchCV(
+            estimator=pipeline,
+            param_grid=grid_search_params,
+            scoring=scoring,
+            cv=tscv,
+            n_jobs=-1,
+            verbose=1,
+        )
+        grid_search.fit(X, y)
+
+        # Store results and update the modeler
+        self.cv_results_ = pd.DataFrame(grid_search.cv_results_)
+        best_params = grid_search.best_params_
+
+        # Remove the 'model__' prefix from the keys to update strategy params
+        cleaned_params = {k.replace("model__", ""): v for k, v in best_params.items()}
+        self.strategy.params.update(cleaned_params)
+
+        # Update the strategy with the best estimator found
+        # The best estimator is a fitted pipeline, we extract the model step
+        best_pipeline = grid_search.best_estimator_
+        self.strategy.model = best_pipeline.named_steps["model"]
+
+        # Ensure scaler is correctly set if used in pipeline
+        if "scaler" in best_pipeline.named_steps:
+            self.scaler = best_pipeline.named_steps["scaler"]
+
+        self.is_fitted = True
+        print(f"Best parameters found: {cleaned_params}")
+
+        return self
 
     def cross_validate(
         self,
@@ -327,32 +344,22 @@ class TimeSeriesModeler:
         if not self.strategy:
             raise ValueError("Strategy must be set before cross-validation")
 
-        # test_size = len(X) // (cv_folds + 1)
         tscv = TimeSeriesSplit(n_splits=cv_folds)
 
         scores = {"mse": [], "mae": [], "r2": []}
 
         for train_idx, test_idx in tscv.split(X):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-            # Create new modeler for this fold
-            # fold_modeler = TimeSeriesModeler(
-            #     self.strategy.__class__(
-            #         self.strategy.model_class
-            #         if hasattr(self.strategy, "model_class")
-            #         else self.strategy.model.__class__,
-            #         **getattr(self.strategy, "params", {}),
-            #     ),
-            # )
-
-            # fold_modeler.fit(X_train, y_train)
-            # y_pred = fold_modeler.predict(X_test)
             fold_strategy = self.strategy.__class__(
                 self.strategy.model_class,
                 **self.strategy.params,
             )
+
             fold_modeler = TimeSeriesModeler(fold_strategy).fit(X_train, y_train)
+
             y_pred = fold_modeler.predict(X_test)
 
             scores["mse"].append(mean_squared_error(y_test, y_pred))
@@ -374,6 +381,7 @@ class TimeSeriesModeler:
         """Get feature importance from the current strategy."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted to get feature importance")
+
         if not self.strategy:
             raise ValueError("First define a strategy model")
 
