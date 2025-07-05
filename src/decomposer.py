@@ -1,10 +1,13 @@
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from statsmodels.tsa.seasonal import MSTL, STL, DecomposeResult
+from statsmodels.tsa.stattools import acf, adfuller, kpss, pacf  # noqa: F401
 
 # --- Decomposition Techniques ---
 
@@ -17,25 +20,7 @@ def run_mstl(
     robust: bool = False,
     **params,
 ) -> pd.DataFrame:
-    """Performs MSTL (Multiple Seasonal-Trend decomposition using LOESS) on a given time series and returns the components as a DataFrame.
-
-    Args:
-        series (pd.Series): The time series data to decompose. Must have a
-                            DatetimeIndex.
-        periods (list[int]): The seasonal periods to decompose.
-        windows (list[int], optional): A list of odd integers for the seasonal
-                                       smoothing windows, corresponding to each
-                                       period. If None, they are determined
-                                       automatically. Defaults to None.
-        trend_window (int, optional): The window size for trend smoothing.
-                                      Must be an odd integer. If None, it is
-                                      determined automatically. Defaults to None.
-        robust (bool): If True, uses a robust version of LOESS. Defaults to False.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the original series, trend,
-                      residuals, and each seasonal component.
-    """
+    """Performs MSTL (Multiple Seasonal-Trend decomposition using LOESS) on a given time series and returns the components as a DataFrame."""
     if not isinstance(series.index, pd.DatetimeIndex):
         raise ValueError("Input series must have a DatetimeIndex.")
 
@@ -83,22 +68,7 @@ def run_stl(
     robust: bool = False,
     **params,
 ) -> pd.DataFrame:
-    """Performs STL (Seasonal-Trend decomposition using LOESS) on a given time series and returns the components as a DataFrame.
-
-    Args:
-        series (pd.Series): The time series data to decompose. Must have a
-                            DatetimeIndex.
-        period (int): The main seasonal period of the series.
-        seasonal_window (int, optional): The window size for seasonal smoothing.
-                                         Must be an odd integer. Defaults to None.
-        trend_window (int, optional): The window size for trend smoothing.
-                                      Must be an odd integer. Defaults to None.
-        robust (bool): If True, uses a robust version of LOESS. Defaults to False.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the original series, trend,
-                      seasonal, and residual components.
-    """
+    """Performs STL (Seasonal-Trend decomposition using LOESS) on a given time series and returns the components as a DataFrame."""
     if not isinstance(series.index, pd.DatetimeIndex):
         raise ValueError("Input series must have a DatetimeIndex.")
 
@@ -109,13 +79,11 @@ def run_stl(
             f"Need at least {2 * period} observations.",
         )
 
-    # --- Parameter Validation ---
     if seasonal_window and seasonal_window % 2 == 0:
         raise ValueError(f"Seasonal window {seasonal_window} must be odd.")
     if trend_window and trend_window % 2 == 0:
         raise ValueError(f"Trend window {trend_window} must be odd.")
 
-    # --- Decomposition ---
     stl_result = STL(
         series,
         **params,
@@ -125,7 +93,6 @@ def run_stl(
         robust=robust,
     ).fit()
 
-    # --- Format Output ---
     return _format_decomposition_result(stl_result)
 
 
@@ -155,6 +122,103 @@ def _format_decomposition_result(
         df["seasonal"] = result.seasonal
 
     return df
+
+
+# --- Validation ---
+
+
+def adf_test(series: pd.Series, alpha: float = 0.05) -> dict[str, Any]:
+    """Augmented Dickey-Fuller test for stationarity.
+
+    Args:
+        series: Time series to test
+        alpha: Significance level
+
+    Returns:
+        Dict with test results
+    """
+    try:
+        # Remove NaN values
+        clean_series = series.dropna()
+        if len(clean_series) < 10:
+            return {"error": "Insufficient data for ADF test"}
+
+        adf_stat, p_value, used_lag, nobs, critical_values, icbest = adfuller(
+            clean_series,
+            autolag="AIC",
+        )
+
+    except Exception as e:
+        return {"error": f"ADF test failed: {e!s}"}
+    else:
+        return {
+            "test_statistic": adf_stat,
+            "p_value": p_value,
+            "used_lags": used_lag,
+            "n_observations": nobs,
+            "critical_values": critical_values,
+            "is_stationary": p_value < alpha,
+            "interpretation": "Stationary" if p_value < alpha else "Non-stationary",
+        }
+
+
+def kpss_test(series: pd.Series, alpha: float = 0.05) -> dict[str, Any]:
+    """KPSS test for stationarity (null hypothesis: series is stationary).
+
+    Args:
+        series: Time series to test
+        alpha: Significance level
+
+    Returns:
+        Dict with test results
+    """
+    try:
+        clean_series = series.dropna()
+        if len(clean_series) < 10:
+            return {"error": "Insufficient data for KPSS test"}
+
+        kpss_stat, p_value, lags, critical_values = kpss(clean_series, regression="c")
+
+    except Exception as e:
+        return {"error": f"KPSS test failed: {e!s}"}
+    else:
+        return {
+            "test_statistic": kpss_stat,
+            "p_value": p_value,
+            "lags": lags,
+            "critical_values": critical_values,
+            "is_stationary": p_value > alpha,  # Note: opposite interpretation from ADF
+            "interpretation": "Stationary" if p_value > alpha else "Non-stationary",
+        }
+
+
+def test_residual_properties(df: pd.DataFrame, alpha: float = 0.05) -> dict[str, Any]:
+    """Comprehensive testing of residual properties.
+
+    Args:
+        df: DataFrame with decomposition results
+        alpha: Significance level
+
+    Returns:
+        Dict with all residual test results
+    """
+    if "resid" not in df.columns:
+        return {"error": "No residuals found"}
+
+    residuals = df["resid"].dropna()
+    if len(residuals) < 20:
+        return {"error": "Insufficient residual data"}
+
+    results = {}
+
+    # Stationarity tests
+    results["adf_test"] = adf_test(residuals, alpha)
+    results["kpss_test"] = kpss_test(residuals, alpha)
+
+    return results
+
+
+# --- Plot functions ---
 
 
 def create_decomposition_figure(
@@ -247,7 +311,55 @@ def create_decomposition_figure(
     return fig
 
 
-def detect_granularity(series):
+def plot_residual_distribution(
+    residuals: pd.Series | np.ndarray,
+    title: str = "Residuals Distribution",
+):
+    if isinstance(residuals, np.ndarray):
+        residuals = pd.Series(residuals)
+
+    median_val = residuals.median()
+
+    fig = go.Figure()
+
+    # Add histogram
+    fig.add_trace(
+        go.Histogram(
+            x=residuals,
+            nbinsx=50,
+            name="Residuals",
+            marker_color="lightblue",
+            opacity=0.75,
+        ),
+    )
+
+    # Add vertical line at the median
+    fig.add_shape(
+        type="line",
+        x0=median_val,
+        x1=median_val,
+        y0=0,
+        y1=1,
+        xref="x",
+        yref="paper",
+        line=dict(color="red", dash="dash"),
+        name="Median",
+    )
+
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title="Residual",
+        yaxis_title="Count",
+        bargap=0.1,
+        template="plotly_white",
+        showlegend=False,
+    )
+
+    return fig
+
+
+def detect_granularity(series: pd.Series):
     """Detect the granularity of a time series with improved accuracy.
 
     Args:
@@ -359,19 +471,15 @@ def format_granularity_info(granularity, confidence, details):
 
     # Color coding based on confidence
     if confidence >= 0.9:
-        icon = "🟢"
         conf_desc = "Very High"
     elif confidence >= 0.7:
-        icon = "🟡"
         conf_desc = "High"
     elif confidence >= 0.5:
-        icon = "🟠"
         conf_desc = "Medium"
     else:
-        icon = "🔴"
         conf_desc = "Low"
 
-    info_text = f"{icon} **{granularity}** (Confidence: {conf_desc} - {confidence:.1%})"
+    info_text = f"**{granularity}** (Confidence: {conf_desc} - {confidence:.1%})"
 
     if details:
         info_text += f"\n- Most common interval: {details.get('most_common_delta_readable', 'N/A')}"

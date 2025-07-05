@@ -89,13 +89,6 @@ def extract_regional_means(
     # Handle time coordinates
     da = _standardize_time_coord(da, custom_time=time_coord)
 
-    # Clean GeoDataFrame to ensure mask and names align correctly
-    # clean_gdf = _gdf.dropna(subset=[column_names]).reset_index(drop=True)
-    # if clean_gdf.empty:
-    #     raise ValueError(
-    #         f"No valid regions left after dropping NaNs from '{column_names}'.",
-    #     )
-
     # Calculate regional means
     mask = mask_regions(
         da,
@@ -110,20 +103,22 @@ def extract_regional_means(
 
     # NOTE: This is a temporal fix
     if "isobaricInhPa" in regional_means.dims:
-        # Choose one:
         # regional_means = regional_means.isel(isobaricInhPa=0)  # select level
         regional_means = regional_means.mean(dim="isobaricInhPa")  # average over levels
 
     # Convert to DataFrame
     df = regional_means.to_pandas()
-    gdf = _gdf.dropna(subset=[column_names])
+
+    if hasattr(df.index, "to_datetimeindex"):
+        df.index = df.index.to_datetimeindex()
+
+    df.index = df.index.tz_localize("UTC").tz_convert(output_timezone)
+
+    # gdf = _gdf.dropna(subset=[column_names])
     region_names = dict(enumerate(_gdf[column_names]))
     df.columns = df.columns.map(region_names)
 
-    df.index = df.index.tz_localize("UTC")
-
-    if output_timezone != "UTC":
-        df.index = df.index.tz_convert(output_timezone)
+    df = df.dropna(how="all")
 
     return df.sort_index()
 

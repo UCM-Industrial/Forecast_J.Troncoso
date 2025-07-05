@@ -3,7 +3,9 @@
 Clean Strategy Pattern implementation with base classes for different model families.
 """
 
+import pickle
 import warnings
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -36,6 +38,8 @@ class ModelStrategy(Protocol):
     def requires_scaling(self) -> bool: ...
 
     def supports_grid_search(self) -> bool: ...
+
+    def supports_shap(self) -> bool: ...
 
 
 class TreeBasedStrategy(ModelStrategy):
@@ -72,6 +76,9 @@ class TreeBasedStrategy(ModelStrategy):
     def supports_grid_search(self) -> bool:
         return True
 
+    def supports_shap(self) -> bool:
+        return True
+
 
 class LinearModelStrategy(ModelStrategy):
     """Base strategy for linear models that require scaling."""
@@ -98,7 +105,6 @@ class LinearModelStrategy(ModelStrategy):
     def get_feature_importance(self) -> dict[str, float] | None:
         if not self.is_fitted or not self.feature_names:
             return None
-        # Coeficientes pueden ser multidimensionales (e.g., para regresión multiclase)
         importance = (
             np.abs(self.model.coef_).mean(axis=0)
             if self.model.coef_.ndim > 1
@@ -110,6 +116,9 @@ class LinearModelStrategy(ModelStrategy):
         return True
 
     def supports_grid_search(self) -> bool:
+        return True
+
+    def supports_shap(self) -> bool:
         return True
 
 
@@ -387,36 +396,41 @@ class TimeSeriesModeler:
 
         return self.strategy.get_feature_importance()
 
-    # def get_shap_values(self, X: pd.DataFrame) -> dict[str, Any]:
-    #     """Calculate SHAP values for model interpretability."""
-    #     if not self.is_fitted:
-    #         raise ValueError("Model must be fitted to calculate SHAP values")
-    #
-    #     if not self.strategy.supports_shap():
-    #         raise ValueError("Current strategy does not support SHAP analysis")
-    #
-    #     try:
-    #         import shap
-    #
-    #         X_processed, _ = self._preprocess(X, fit_scaler=False)
-    #
-    #         explainer = shap.Explainer(self.strategy.model, X_processed)
-    #         shap_values = explainer(X_processed)
-    #
-    #         return {
-    #             "shap_values": shap_values,
-    #             "feature_names": X_processed.columns.tolist(),
-    #             "expected_value": explainer.expected_value,
-    #         }
-    #     except ImportError:
-    #         raise ImportError("SHAP not installed. Install with: pip install shap")
+    def get_shap_values(self, X: pd.DataFrame) -> dict[str, Any]:
+        """Calculate SHAP values for model interpretability."""
+        if not self.is_fitted:
+            raise ValueError("Model must be fitted to calculate SHAP values")
 
+        if not self.strategy.supports_shap():
+            raise ValueError("Current strategy does not support SHAP analysis")
 
-# Convenience functions for quick model creation
-# def create_modeler(model_type: str, **params) -> TimeSeriesModeler:
-#     """Create a TimeSeriesModeler with specified model type."""
-#     strategy = ModelFactory.create_strategy(model_type, **params)
-#     return TimeSeriesModeler(strategy)
+        try:
+            import shap
+
+            X_processed = self._preprocess(X, fit_scaler=False)
+
+            explainer = shap.Explainer(self.strategy.model, X_processed)
+            shap_values = explainer(X_processed)
+
+            return {
+                "shap_values": shap_values,
+                "feature_names": X_processed.columns.tolist(),
+                "expected_value": explainer.expected_value,
+            }
+        except ImportError:
+            raise ImportError("SHAP not installed. Install with: pip install shap")
+
+    def save_model(self, file_path: str | Path):
+        """Export data to a .pkl file using pathlib."""
+        model = self.strategy.model
+
+        path = Path(file_path)
+
+        # Ensure the directory exists
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with path.open("wb") as f:
+            pickle.dump(model, f)
 
 
 # --- Plot functions ---
@@ -464,11 +478,7 @@ def create_forecast_vs_actual(
     fig.update_layout(
         title=title,
         xaxis_title="Date",
-        yaxis_title="Value",
-        # legend=dict(x=0.01, y=0.99),
-        # height=height,
-        # width=width,
-        # template="plotly_dark",
+        yaxis_title="Generation (MWh)",
     )
 
     return fig

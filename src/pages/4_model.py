@@ -1,8 +1,10 @@
 import itertools
+import pickle
 from typing import Any
 
-import numpy as np
+import matplotlib.pyplot as plt
 import pandas as pd
+import shap
 import streamlit as st
 
 from _util import read_csv_with_datetime
@@ -13,7 +15,7 @@ from modeling import (
     plot_feature_importance,
 )
 
-st.title("Time Series Forecasting Suite")
+st.title("Time Series Forecasting Suit")
 
 
 def init_session_state() -> None:
@@ -24,6 +26,8 @@ def init_session_state() -> None:
         ("latest_run", None),
         ("config", None),
         ("feature_importance", None),
+        ("shap_values", None),
+        ("model", None),
     ]:
         if key not in st.session_state:
             st.session_state[key] = value
@@ -35,16 +39,11 @@ def load_and_process_data(uploaded_file) -> pd.DataFrame:
     return read_csv_with_datetime(uploaded_file)
 
 
-def _create_range_list(range_tuple: tuple[float, float], step: float) -> list[float]:
-    """Helper function to create a list from a range with proper rounding."""
-    return [round(x, 2) for x in np.arange(range_tuple[0], range_tuple[1] + 1e-8, step)]
-
-
 def get_model_params(model_key: str) -> dict[str, Any]:
     """Render and return parameters for the selected model."""
     if model_key in ["xgboost", "lightgbm", "catboost"]:
         return {
-            "n_estimators": st.slider("N Estimators", 50, 500, 100, 50),
+            "n_estimators": st.slider("N Estimators", 50, 1000, 100, 50),
             "max_depth": st.slider("Max Depth", 3, 15, 6),
             "learning_rate": st.slider("Learning Rate", 0.01, 0.3, 0.1, 0.01),
         }
@@ -58,7 +57,8 @@ def get_model_params(model_key: str) -> dict[str, Any]:
         }
     if model_key == "holt-winters":
         return {
-            "seasonal_periods": st.slider("Seasonal Periods", 2, 24, 12),
+            # "seasonal_periods": st.slider("Seasonal Periods", 2, 24, 12),
+            "seasonal_periods": st.number_input("Seasonal Periods", 2, 366, 12),
             "trend": st.selectbox("Trend", ["add", "mul", None]),
             "seasonal": st.selectbox("Seasonal", ["add", "mul", None]),
         }
@@ -138,7 +138,7 @@ def get_basic_param_grid(model_key: str) -> dict[str, list[Any]]:
         sp_range = st.slider(
             "Seasonal Periods range",
             2,
-            24,
+            365,
             (6, 12),
             1,
             help="Periods in full seasonal cycle",
@@ -177,6 +177,13 @@ def render_config() -> dict[str, Any] | None:
         "Feature Variables",
         [col for col in numeric_cols if col != target_col],
         default=[col for col in numeric_cols if col != target_col],
+    )
+
+    st.download_button(
+        "Download actual CSV",
+        data[[*feature_cols, target_col]].to_csv(),
+        file_name=f"{target_col}_master_df.csv",
+        mime="text/csv",
     )
 
     st.subheader("Select Model")
@@ -223,10 +230,10 @@ def render_config() -> dict[str, Any] | None:
     with col2:
         test_size = st.slider(
             "Test Size",
-            min_value=0.05,
+            min_value=0.02,
             max_value=0.4,
             value=0.2,
-            step=0.05,
+            # step=0.02,
             help="Fraction of data reserved for final testing",
         )
 
@@ -259,12 +266,25 @@ def render_latest_run() -> None:
     st.subheader(f"Results for: {run_info['model_type']}")
     # st.write(run_info)
 
-    # Display metrics
-    st.metric(
-        "CV Mean Absolute Error (MAE)",
-        f"{run_info['mae']:.4f}",
-    )
-    st.metric("CV R² Score", f"{run_info['r2']:.4f}")
+    col1, col2 = st.columns(2)
+    with col1:
+        # Display metrics
+        st.metric(
+            "CV Mean Absolute Error (MAE)",
+            f"{run_info['mae']:.4f}",
+        )
+        st.metric("CV R² Score", f"{run_info['r2']:.4f}")
+    with col2:
+        st.subheader("Save Model")
+        model = st.session_state.model
+
+        pkl_bytes = pickle.dumps(model)
+        st.download_button(
+            label="Download model as .pkl",
+            data=pkl_bytes,
+            file_name="model.pkl",
+            mime="application/octet-stream",
+        )
 
     # Plot predictions
     fig = create_forecast_vs_actual(
@@ -274,13 +294,27 @@ def render_latest_run() -> None:
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    # Feature importance
     try:
         fig = plot_feature_importance(st.session_state.feature_importance)
         st.plotly_chart(fig)
     except:
         st.warning("This model does not allow Feature importance")
 
-    # Feature importance
+    # SHAP analysis
+    st.write(st.session_state.shap_values)
+    try:
+        st.write("**SHAP values**")
+        shap_dict = st.session_state.shap_values
+        shap_values = shap_dict["shap_values"]
+
+        # Beeswarm plot
+        fig_beeswarm = plt.figure()
+        shap.plots.beeswarm(shap_values, show=False)
+        st.pyplot(fig_beeswarm)
+
+    except:
+        st.warning("This model does not allow SHAP Analysis")
 
 
 def render_model_comparison() -> None:
@@ -396,6 +430,10 @@ def run_training_session(
                 else:
                     st.warning("Grid search did not produce results.")
 
+            try:
+                shap_values = modeler.get_shap_values(X_test)
+            except:
+                shap_values = {}
             # --- Prediction and Storing Results ---
             predictions = modeler.predict(X_test)
             metrics = modeler.evaluate_regression_metrics(
@@ -408,6 +446,7 @@ def run_training_session(
                 "folds": config["cv_folds"],
                 "params": modeler.strategy.params,
                 "features": config["features"],
+                "shap_values": shap_values,
                 **metrics,
             }
 
@@ -424,6 +463,8 @@ def run_training_session(
             }
             st.write(run_summary)
             st.session_state.feature_importance = modeler.get_feature_importance()
+            st.session_state.shap_values = shap_values
+            st.session_state.model = modeler.strategy.model
 
             st.success(
                 f"Model {config['model_type']} ({config['training_type']}) trained successfully!",
@@ -431,6 +472,7 @@ def run_training_session(
 
         except (ImportError, ValueError, TypeError) as e:
             st.error(f"An error occurred: {e}")
+            st.write(e)
         except Exception as e:
             st.error(f"An unexpected error occurred during training: {e}")
 
@@ -453,19 +495,22 @@ def main() -> None:
         st.info("Upload data via the sidebar to get started.")
         return
 
-    tab_list = ["Configuration", "Last results", "Performance comparasion", "Predict"]
-    tab1, tab2, tab3, tab4 = st.tabs(tab_list)
+    tab_list = [
+        "Configuration",
+        "Last results",
+        "Performance comparasion",
+    ]
+    tab1, tab2, tab3 = st.tabs(tab_list)
 
     with tab1:
-        st.session_state.config = render_config()
+        config = render_config()
 
-        if st.session_state.config:
-            run_training_session(st.session_state.config)
+        if config:
+            run_training_session(config)
     with tab2:
         render_latest_run()
     with tab3:
         render_model_comparison()
-        # st.rerun()
 
 
 if __name__ == "__main__":

@@ -21,8 +21,6 @@ from preprocessor import (
 warnings.filterwarnings("ignore")
 
 st.session_state.engine = None
-st.session_state.coord_lat = "lat"
-st.session_state.coord_lon = "lon"
 
 
 # Cache data loading functions
@@ -66,6 +64,8 @@ def process_regional_means(
     chunk_size: dict[str, int],
     column_names: str,
     output_timezone: str,
+    latitude: str,
+    longitude: str,
 ) -> pd.DataFrame:
     """Process regional means with caching."""
     ds = load_grib_dataset(grib_path)
@@ -75,8 +75,8 @@ def process_regional_means(
         _ds=ds,
         _gdf=gdf,
         data_variable=data_variable,
-        latitude=st.session_state.coord_lat,
-        longitude=st.session_state.coord_lon,
+        latitude=latitude,
+        longitude=longitude,
         time_coord=time_coord,
         chunk_size=chunk_size,
         column_names=column_names,
@@ -100,7 +100,10 @@ def validate_file_path(file_path: str, file_type: str) -> tuple[bool, str]:
         ".grb2",
         ".nc",
     ]:
-        return False, "File should have a GRIB extension (.grib, .grib2, .grb, .grb2)"
+        return (
+            False,
+            "File should have a GRIB or NC extension (.grib, .grib2, .grb, .grb2, .nc)",
+        )
 
     if file_type == "Shapefile" and path.suffix.lower() != ".shp":
         return False, "File should have a .shp extension"
@@ -113,17 +116,17 @@ def render_file_input_section() -> tuple[str | None, str | None]:
     with st.sidebar:
         st.header("Data upload")
 
-        st.subheader("🌐 GRIB File")
+        st.subheader("🌐 Geospatial File")
         grib_path = st.text_input(
-            "GRIB File Path:",
+            "Geospatial File Path:",
             placeholder="e.g., /path/to/your/data.grib2",
-            help="Enter the full path to your GRIB file",
+            help="Enter the full path to your geoespatial file, with .grib, .grib2 or .nc extensions",
         )
 
         if grib_path:
             valid, error_msg = validate_file_path(grib_path, "GRIB")
             if valid:
-                st.success("✅ GRIB file found")
+                st.success("✅ Geospatial file found")
             else:
                 st.error(error_msg)
                 grib_path = None
@@ -212,6 +215,8 @@ def render_visualization_section(
     grib_path: str,
     shapefile_path: str,
     data_vars: list[str],
+    longitude: str,
+    latitude: str,
 ):
     """Render data visualization section."""
     st.header("Data Visualization")
@@ -221,8 +226,6 @@ def render_visualization_section(
 
     if not selected_var:
         return
-
-    # col1, col2 = st.columns(2)
 
     st.subheader("Interactive Leafmap Viewer")
     if st.button("Visualize on Map", key="leafmap_plot"):
@@ -240,8 +243,8 @@ def render_visualization_section(
                 display_dataarray(
                     m,
                     da,
-                    lat_name=st.session_state.lat_name,
-                    lon_name=st.session_state.lon_name,
+                    lat_name=latitude,
+                    lon_name=longitude,
                 )
                 display_mask(m, gdf)
                 m.to_streamlit(height=600)
@@ -254,6 +257,8 @@ def render_processing_section(
     shapefile_path: str,
     data_vars: list[str],
     shapefile_cols: list[str],
+    longitude: str,
+    latitude: str,
 ):
     """Render regional mean processing section."""
     st.header("Regional Mean Processing")
@@ -299,8 +304,8 @@ def render_processing_section(
         )
 
     chunk_size = {
-        st.session_state.coord_lat: lat_chunk,
-        st.session_state.coord_lon: lon_chunk,
+        latitude: lat_chunk,
+        longitude: lon_chunk,
     }
 
     # Processing section
@@ -315,6 +320,8 @@ def render_processing_section(
             chunk_size,
             column_names,
             output_timezone,
+            latitude=latitude,
+            longitude=longitude,
         )
 
 
@@ -326,6 +333,8 @@ def process_data(
     chunk_size: dict[str, int],
     column_names: str,
     output_timezone: str,
+    latitude: str,
+    longitude: str,
 ):
     """Execute the regional mean processing."""
     try:
@@ -345,6 +354,8 @@ def process_data(
                 chunk_size,
                 column_names,
                 output_timezone,
+                latitude=latitude,
+                longitude=longitude,
             )
 
             progress_bar.progress(100)
@@ -367,11 +378,14 @@ def process_data(
                 st.dataframe(df.head(10))
 
         with col2:
-            st.write("**Summary Statistics:**")
-            st.dataframe(df.describe())
+            st.write(
+                f"**NaN**: {df.isna().sum().sum()} **Duplicates**: {df.duplicated().sum()}",
+            )
+            with st.expander("Summary statistics", expanded=False):
+                st.dataframe(df.describe())
 
         # Time series visualization
-        if len(df.columns) <= 17:  # Only plot if reasonable number of regions
+        if len(df.columns) <= 10:  # Only plot if reasonable number of regions
             st.subheader("Time Series Visualization")
             fig = px.line(df, title="Regional Mean Time Series")
             fig.update_layout(xaxis_title="Time", yaxis_title=f"{data_variable}")
@@ -425,11 +439,11 @@ def main():
     with col1:
         data_vars = render_grib_info(grib_path)
 
-        st.session_state.lon_name = st.text_input(
+        longitude = st.text_input(
             "Set longitude coord name",
             value="longitude",
         )
-        st.session_state.lat_name = st.text_input(
+        latitude = st.text_input(
             "Set latitude coord name",
             value="latitude",
         )
@@ -442,13 +456,26 @@ def main():
     st.divider()
 
     # Visualization section
-    render_visualization_section(grib_path, shapefile_path, data_vars)
+    render_visualization_section(
+        grib_path,
+        shapefile_path,
+        data_vars,
+        longitude=longitude,
+        latitude=latitude,
+    )
 
     # Add separator
     st.divider()
 
     # Processing section
-    render_processing_section(grib_path, shapefile_path, data_vars, shapefile_cols)
+    render_processing_section(
+        grib_path,
+        shapefile_path,
+        data_vars,
+        shapefile_cols,
+        longitude,
+        latitude,
+    )
 
 
 if __name__ == "__main__":

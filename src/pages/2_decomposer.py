@@ -1,3 +1,6 @@
+import io
+import zipfile
+
 import pandas as pd
 import streamlit as st
 
@@ -6,8 +9,10 @@ from decomposer import (
     create_decomposition_figure,
     detect_granularity,
     format_granularity_info,
+    plot_residual_distribution,
     run_mstl,
     run_stl,
+    test_residual_properties,
 )
 
 # Configure page
@@ -15,6 +20,8 @@ from decomposer import (
 #     page_title="Time Series Decomposition",
 #     layout="wide",
 # )
+
+st.session_state.decomposed_df = None
 
 
 @st.cache_data
@@ -304,6 +311,7 @@ def run_stl_decomposition(
                 series = df[columns[0]]
                 result_df = cached_run_stl(series, period, seasonal_window)
 
+        st.session_state.decomposed_df = result_df
         st.success("STL Decomposition Complete!")
         display_results(result_df, "stl", columns, is_multi_mode)
 
@@ -327,6 +335,7 @@ def run_mstl_decomposition(
                 series = df[columns[0]]
                 result_df = cached_run_mstl(series, periods)
 
+        st.session_state.decomposed_df = result_df
         st.success("MSTL Decomposition Complete!")
         display_results(result_df, "mstl", columns, is_multi_mode)
 
@@ -349,25 +358,33 @@ def display_results(
     with st.spinner("Creating visualization..."):
         if is_multi_mode and len(columns) > 1:
             # For multi-column, create separate plots for each column
-            for col in columns:
-                st.subheader(f"Decomposition for: {col}")
+            for i, col in enumerate(columns):
+                # Display only first 6 decompositions
+                if i < 2:
+                    st.subheader(f"Decomposition for: {col}")
 
-                # Filter columns for this specific original column
-                col_columns = [c for c in result_df.columns if c.endswith(f"_{col}")]
-                col_df = result_df[col_columns]
+                    # Filter columns for this specific original column
+                    col_columns = [
+                        c for c in result_df.columns if c.endswith(f"_{col}")
+                    ]
+                    col_df = result_df[col_columns]
 
-                # Rename columns back to standard names for plotting
-                renamed_cols = {}
-                for c in col_columns:
-                    if c.startswith("observed_"):
-                        renamed_cols[c] = "observed"
-                    else:
-                        component = c.replace(f"_{col}", "")
-                        renamed_cols[c] = component
+                    # Rename columns back to standard names for plotting
+                    renamed_cols = {}
+                    for c in col_columns:
+                        if c.startswith("observed_"):
+                            renamed_cols[c] = "observed"
+                        else:
+                            component = c.replace(f"_{col}", "")
+                            renamed_cols[c] = component
 
-                col_df_renamed = col_df.rename(columns=renamed_cols)
-                fig = create_decomposition_figure(col_df_renamed, decomposition_type)
-                st.plotly_chart(fig, use_container_width=True)
+                    col_df_renamed = col_df.rename(columns=renamed_cols)
+
+                    fig = create_decomposition_figure(
+                        col_df_renamed,
+                        decomposition_type,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
         else:
             # Single column visualization
             fig = create_decomposition_figure(result_df, decomposition_type)
@@ -376,27 +393,104 @@ def display_results(
     # Download section
     st.header("Download Results")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        output_csv = result_df.to_csv(index=True).encode("utf-8")
-        filename_suffix = (
-            f"_{'_'.join(columns)}"
-            if is_multi_mode and len(columns) > 1
-            else f"_{columns[0]}"
-        )
+    separate_files = st.toggle("Download components separately (as ZIP)", value=True)
+
+    # Define a common suffix for filenames
+    filename_suffix = (
+        f"_{'_'.join(columns)}"
+        if is_multi_mode and len(columns) > 1
+        else f"_{columns[0]}"
+    )
+
+    if separate_files:
+        # Option 1: Download a ZIP with separate CSVs for each component
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_f:
+            # Filter and write each component to the zip file
+            for component in ["seasonal", "trend", "resid"]:
+                component_df = result_df.filter(like=component)
+                csv_bytes = component_df.to_csv(index=True).encode("utf-8")
+                zip_f.writestr(f"{component}{filename_suffix}.csv", csv_bytes)
+
         st.download_button(
-            "Download CSV",
-            output_csv,
-            file_name=f"{decomposition_type}_decomposition_results{filename_suffix}.csv",
+            label="Download Components ZIP",
+            data=zip_buffer.getvalue(),
+            file_name=f"{decomposition_type}_components{filename_suffix}.zip",
+            mime="application/zip",
+        )
+    else:
+        # Option 2 (Default): Download a single CSV with all data
+        output_csv = result_df.to_csv(index=True).encode("utf-8")
+        st.download_button(
+            label="Download Combined CSV",
+            data=output_csv,
+            file_name=f"{decomposition_type}_decomposition{filename_suffix}.csv",
             mime="text/csv",
         )
 
-    with col2:
-        metrics_col1, metrics_col2 = st.columns(2)
-        with metrics_col1:
-            st.metric("Data Points", len(result_df))
-        with metrics_col2:
-            st.metric("Columns Processed", len(columns))
+
+def render_validation(
+    df: pd.DataFrame,
+    is_multi_mode: bool,
+    resid_name: str = "resid",
+) -> None:
+    if is_multi_mode:
+        st.warning("Test are only avialable for single column decomposition")
+    else:
+        results = test_residual_properties(df)
+
+        st.subheader("Stationarity Test Results")
+        col1, col2 = st.columns(2)
+        # ADF Test
+        with col1:
+            st.markdown("##### Augmented Dickey-Fuller (ADF) Test")
+            adf_data = results["adf_test"]
+
+            # Display interpretation with a colored box for quick insights
+            if adf_data["interpretation"] == "Stationary":
+                st.success(f"Interpretation: **{adf_data['interpretation']}**")
+            else:
+                st.warning(f"Interpretation: **{adf_data['interpretation']}**")
+
+            # Use st.metric for key numerical values
+            st.metric(label="Test Statistic", value=f"{adf_data['test_statistic']:.4f}")
+            st.metric(
+                label="P-Value",
+                value=f"{adf_data['p_value']:.4f}"
+                if adf_data["p_value"] > 0.0001
+                else "< 0.0001",
+            )
+
+            # Hide less critical details in an expander
+            with st.expander("See test details"):
+                st.write("Critical Values:", adf_data["critical_values"])
+                st.info(
+                    f"Observations: {adf_data['n_observations']} | Lags Used: {adf_data['used_lags']}",
+                )
+
+        # KPSS Test
+        with col2:
+            st.markdown("##### Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test")
+            kpss_data = results["kpss_test"]
+
+            if kpss_data["interpretation"] == "Stationary":
+                st.success(f"Interpretation: **{kpss_data['interpretation']}**")
+            else:
+                st.warning(f"Interpretation: **{kpss_data['interpretation']}**")
+
+            st.metric(
+                label="Test Statistic",
+                value=f"{kpss_data['test_statistic']:.4f}",
+            )
+            st.metric(label="P-Value", value=f"{kpss_data['p_value']:.4f}")
+
+            with st.expander("See test details"):
+                st.write("Critical Values:", kpss_data["critical_values"])
+                st.info(f"Lags Used: {kpss_data['lags']}")
+
+        # Distribution
+        fig = plot_residual_distribution(df[resid_name])
+        st.plotly_chart(fig)
 
 
 def main():
@@ -417,25 +511,33 @@ def main():
             st.success("Data loaded successfully")
 
     # Data upload section
-    result = render_data_section(df=df)
-    if result[0] is None:
-        return
+    tab1, tab2 = st.tabs(["Decompose", "Validation"])
 
-    df, columns, is_multi_mode = result
+    with tab1:
+        result = render_data_section(df=df)
+        if result[0] is None:
+            return
 
-    # Decomposition type selection
-    st.header("Decomposition Method")
-    decomp_type = st.radio(
-        "Choose decomposition method:",
-        ["STL", "MSTL"],
-        horizontal=True,
-    )
+        df, columns, is_multi_mode = result
 
-    # Render appropriate section based on selection
-    if decomp_type == "STL":
-        render_stl_section(df, columns, is_multi_mode)
-    else:
-        render_mstl_section(df, columns, is_multi_mode)
+        # Decomposition type selection
+        st.header("Decomposition Method")
+        decomp_type = st.radio(
+            "Choose decomposition method:",
+            ["STL", "MSTL"],
+            horizontal=True,
+        )
+
+        # Render appropriate section based on selection
+        if decomp_type == "STL":
+            render_stl_section(df, columns, is_multi_mode)
+        else:
+            render_mstl_section(df, columns, is_multi_mode)
+    with tab2:
+        if st.session_state.decomposed_df is None:
+            return
+        else:
+            render_validation(st.session_state.decomposed_df, is_multi_mode)
 
 
 if __name__ == "__main__":

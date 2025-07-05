@@ -136,12 +136,47 @@ wheels = [
 ]
 
 [[package]]
+name = "catboost"
+version = "1.2.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "graphviz" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "scipy" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/ee/8f146ee0b5c6321d4699edd90a036fe68b2c5fad910fa2b369f14043c192/catboost-1.2.8.tar.gz", hash = "sha256:4a1d1aca5caecd919ec476f72c7abd98a704c24fda35506d4d7d71f77f07cb29", size = 58080776 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/5a/077dd8f35de4f10c934da703bd186b2e85223372886d285edae8f42f75d1/catboost-1.2.8-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:777987e1483824f93b9cb904860ef46dfb3cd184f879e47413bc7163b9514830", size = 27789594 },
+    { url = "https://files.pythonhosted.org/packages/6f/73/06959c42d797c3e207c352f6050180b2217c6709d261e5f4a3d77dcdd067/catboost-1.2.8-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:a72681c50cbfe2fa4a6f85934bc707e0f7ff50a10a51801317418adf09d57cef", size = 98718946 },
+    { url = "https://files.pythonhosted.org/packages/0c/4b/d04e067df4401902cb2249df241bc1502bf90e990c6a3da5f82ba7de60fa/catboost-1.2.8-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:8d2b58781c7ff2f974bde857da0d10d867366979193a4e7052746330a8b76b55", size = 99162049 },
+    { url = "https://files.pythonhosted.org/packages/0d/bc/35f50d1c6d898eb05d3ad3001b479cc6a837f6829a0ed68e6993e31da16e/catboost-1.2.8-cp313-cp313-win_amd64.whl", hash = "sha256:9c04ab1df71501d75cad80757f33d60bab2704b2450401d2c8cf3f3bcb6bd9f8", size = 102416981 },
+]
+
+[[package]]
 name = "catppuccin"
 version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2f/cd/e46ceb560c027af592bfacac73f7f203f67a6cc6fba4d7abc6c095c81963/catppuccin-2.4.1.tar.gz", hash = "sha256:bed41d14189a52569f6c1fd941155d7fc13561e76e84f11c5cf04dd0cb07b3c1", size = 1885055 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/4f/4f893a4bf8515c57b9a37fc9355e0adb994e920b0e3f154dde529dc6ca6a/catppuccin-2.4.1-py3-none-any.whl", hash = "sha256:7821374c18a2c51ce1fd9239bce5689a4da6d9f26d1e324e0d19cc0e2ad7f77b", size = 18654 },
+]
+
+[[package]]
+name = "cdsapi"
+version = "0.7.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ecmwf-datastores-client" },
+    { name = "requests" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/61/64/abcecb593120d4dc7ffec5e79157534acbaee04b56f3662a93601cbd7618/cdsapi-0.7.6.tar.gz", hash = "sha256:f85ab5b34269fed30240d9fb99b513e01eb91010eb9d981039f2a2bfab35f375", size = 13307 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/77/983a53adadd3e8e25195d4a232b6f672daf53f1889b3e7ba5e1640991dbd/cdsapi-0.7.6-py2.py3-none-any.whl", hash = "sha256:d4e813509930d1a948929fda829e635cb2c4dd6457ea90e41c5cf9c7788e4e0c", size = 12286 },
 ]
 
 [[package]]
@@ -410,6 +445,33 @@ wheels = [
 ]
 
 [[package]]
+name = "ecmwf-datastores-client"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "multiurl" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/77/1eb785743e2a4c553db5b046d2cad1bd3f40b12c00098a9e92324c6a379b/ecmwf_datastores_client-0.2.0.tar.gz", hash = "sha256:143ac5eddfe66c338d907a3f35c703c6332a18b729754688dcf565a26a56acf4", size = 47628 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/d8/99025aa78d947ca2f457be15238ed9baf962588ca8efc0476021eeb6dbce/ecmwf_datastores_client-0.2.0-py3-none-any.whl", hash = "sha256:db914e61fbd98c79314fc90f336a3ae484d8951bcb1deca8d075d3af9ab4ec95", size = 28929 },
+]
+
+[[package]]
+name = "ecmwf-opendata"
+version = "0.3.20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "multiurl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/03/52b92e178be77caa03a5977caeadc6048116adb4ca583eef9c8902383788/ecmwf_opendata-0.3.20.tar.gz", hash = "sha256:71202659f359a1290fccefd8c77fbd04a4016551de254646deb746a1a475d39d", size = 26654 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/0c/9337fb9b9209b12e1e2691e8a0b891b75a335075ddea1da0c9762d3c2743/ecmwf_opendata-0.3.20-py3-none-any.whl", hash = "sha256:46a19545616c26fea096ded646d9699d772e59202193eb5d533c95935b984f77", size = 20353 },
+]
+
+[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -585,6 +647,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/89/37df0b71473153574a5cdef8f242de422a0f5d26d7a9e231e6f169b4ad14/gitpython-3.1.44.tar.gz", hash = "sha256:c87e30b26253bf5418b01b0660f818967f3c503193838337fe5e573331249269", size = 214196 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/9a/4114a9057db2f1462d5c8f8390ab7383925fe1ac012eaa42402ad65c2963/GitPython-3.1.44-py3-none-any.whl", hash = "sha256:9e0e10cda9bed1ee64bc9a6de50e7e38a9c9943241cd7f585f6df3ed28011110", size = 207599 },
+]
+
+[[package]]
+name = "graphviz"
+version = "0.21"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b3/3ac91e9be6b761a4b30d66ff165e54439dcd48b83f4e20d644867215f6ca/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78", size = 200434 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/4c/e0ce1ef95d4000ebc1c11801f9b944fa5910ecc15b5e351865763d8657f8/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42", size = 47300 },
 ]
 
 [[package]]
@@ -923,6 +994,23 @@ wheels = [
 ]
 
 [[package]]
+name = "lightgbm"
+version = "4.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/68/0b/a2e9f5c5da7ef047cc60cef37f86185088845e8433e54d2e7ed439cce8a3/lightgbm-4.6.0.tar.gz", hash = "sha256:cb1c59720eb569389c0ba74d14f52351b573af489f230032a1c9f314f8bab7fe", size = 1703705 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/75/cffc9962cca296bc5536896b7e65b4a7cdeb8db208e71b9c0133c08f8f7e/lightgbm-4.6.0-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:b7a393de8a334d5c8e490df91270f0763f83f959574d504c7ccb9eee4aef70ed", size = 2010151 },
+    { url = "https://files.pythonhosted.org/packages/21/1b/550ee378512b78847930f5d74228ca1fdba2a7fbdeaac9aeccc085b0e257/lightgbm-4.6.0-py3-none-macosx_12_0_arm64.whl", hash = "sha256:2dafd98d4e02b844ceb0b61450a660681076b1ea6c7adb8c566dfd66832aafad", size = 1592172 },
+    { url = "https://files.pythonhosted.org/packages/64/41/4fbde2c3d29e25ee7c41d87df2f2e5eda65b431ee154d4d462c31041846c/lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl", hash = "sha256:4d68712bbd2b57a0b14390cbf9376c1d5ed773fa2e71e099cac588703b590336", size = 3454567 },
+    { url = "https://files.pythonhosted.org/packages/42/86/dabda8fbcb1b00bcfb0003c3776e8ade1aa7b413dff0a2c08f457dace22f/lightgbm-4.6.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:cb19b5afea55b5b61cbb2131095f50538bd608a00655f23ad5d25ae3e3bf1c8d", size = 3569831 },
+    { url = "https://files.pythonhosted.org/packages/5e/23/f8b28ca248bb629b9e08f877dd2965d1994e1674a03d67cd10c5246da248/lightgbm-4.6.0-py3-none-win_amd64.whl", hash = "sha256:37089ee95664b6550a7189d887dbf098e3eadab03537e411f52c63c121e3ba4b", size = 1451509 },
+]
+
+[[package]]
 name = "llvmlite"
 version = "0.44.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1028,6 +1116,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/99/5b/a36a337438a14116b16480db471ad061c36c3694df7c2084a0da7ba538b7/matplotlib_inline-0.1.7.tar.gz", hash = "sha256:8423b23ec666be3d16e16b60bdd8ac4e86e840ebd1dd11a30b9f117f2fa0ab90", size = 8159 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/8e/9ad090d3553c280a8060fbf6e24dc1c0c29704ee7d1c372f0c174aa59285/matplotlib_inline-0.1.7-py3-none-any.whl", hash = "sha256:df192d39a4ff8f21b1895d72e6a13f5fcc5099f00fa84384e0ea28c2cc0653ca", size = 9899 },
+]
+
+[[package]]
+name = "multiurl"
+version = "0.3.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "pytz" },
+    { name = "requests" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/05/f6cb8e9506936c638550dda75e97c70535acf89eb147bfb8655e6d154256/multiurl-0.3.5.tar.gz", hash = "sha256:c2fb8b85227caa453fa0c9e711c5a83e3fd6d9a30b5010ce8a8a4e872d31211e", size = 18527 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/b4/4dd3f8f8bdb79bf65a1882fbf769a27e3ce27e9566faa0aeaa295ed755d7/multiurl-0.3.5-py3-none-any.whl", hash = "sha256:37b920c3116861198ec5b24080fed5344514006021eec969784dabc76fcf3d63", size = 21323 },
 ]
 
 [[package]]
@@ -2145,7 +2248,9 @@ name = "ts-energy-patterns"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "catboost" },
     { name = "leafmap" },
+    { name = "lightgbm" },
     { name = "matplotlib" },
     { name = "nbformat" },
     { name = "numpy" },
@@ -2163,8 +2268,10 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "catppuccin" },
+    { name = "cdsapi" },
     { name = "cfgrib" },
     { name = "dask" },
+    { name = "ecmwf-opendata" },
     { name = "flox" },
     { name = "geopandas" },
     { name = "ipykernel" },
@@ -2184,7 +2291,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "catboost", specifier = ">=1.2.8" },
     { name = "leafmap", specifier = ">=0.48.5" },
+    { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "matplotlib", specifier = ">=3.10.1" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "numpy", specifier = ">=2.2.4" },
@@ -2202,8 +2311,10 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "catppuccin", specifier = ">=2.4.1" },
+    { name = "cdsapi", specifier = ">=0.7.6" },
     { name = "cfgrib", specifier = ">=0.9.15.0" },
     { name = "dask", specifier = ">=2025.4.1" },
+    { name = "ecmwf-opendata", specifier = ">=0.3.20" },
     { name = "flox", specifier = ">=0.10.3" },
     { name = "geopandas", specifier = ">=1.0.1" },
     { name = "ipykernel", specifier = ">=6.29.5" },

@@ -20,7 +20,6 @@ st.markdown(
     """
     - **Geospatial Processor**: Load and process climate data (e.g., `.grib` files), apply spatial masks, and generate structured inputs for modeling.
     - **Series Decomposer**: Apply STL or MSTL to split production series into trend, seasonal, and residual components.
-    - **Scenario Builder**: Create mid to long-term demand or climate scenarios, including capacity expansions or synthetic variability.
     - **Forecasting Suit**: Train and evaluate forecasting models (e.g., Holt-Winters, XGBoost), visualize predictions, and export results.
     """,
 )

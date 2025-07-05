@@ -3,6 +3,7 @@ import pickle
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
@@ -46,7 +47,7 @@ def read_csv_with_datetime(
     datetime_col: str = "datetime",
     input_timezone: str = "America/Santiago",
     output_timezone: str = "America/Santiago",
-):
+) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=[datetime_col])
     df[datetime_col] = pd.to_datetime(df[datetime_col], errors="raise", utc=True)
     df[datetime_col] = df[datetime_col].dt.tz_convert(output_timezone)
@@ -211,6 +212,106 @@ def filter_by_date_range(
     mask = (dates_to_filter >= start_date) & (dates_to_filter <= end_date)
 
     return df.loc[mask].copy()
+
+
+def create_cyclical_features(
+    df: pd.DataFrame,
+    datetime_col: str | None = None,
+    features: list[str] = ["hour", "day", "month"],
+    include_year: bool = True,
+):
+    """Apply cyclical encoding to datetime features."""
+    temp_df = df.copy()
+
+    # Determine the datetime series to use
+    if datetime_col:
+        # Use specified column
+        if datetime_col not in temp_df.columns:
+            raise ValueError(f"Column '{datetime_col}' not found in DataFrame")
+        df_series = temp_df[datetime_col]
+    else:
+        # Use index as datetime source
+        if not isinstance(temp_df.index, pd.DatetimeIndex):
+            raise ValueError(
+                "When datetime_col is None, DataFrame index must be a DatetimeIndex",
+            )
+        df_series = temp_df.index.to_series()
+
+    # Ensure the series is datetime type
+    if not pd.api.types.is_datetime64_any_dtype(df_series):
+        try:
+            df_series = pd.to_datetime(df_series)
+        except Exception as e:
+            raise ValueError(f"Cannot convert to datetime: {e}")
+
+    # Mapping of features to their maximum values for cyclical encoding
+    max_vals = {
+        "hour": 24,
+        "day": 31,
+        "month": 12,
+        "dayofweek": 7,
+    }
+
+    for feature in features:
+        if feature not in max_vals:
+            print(f"Warning: Feature '{feature}' not recognized. Skipping.")
+            continue
+
+        # Extract the appropriate datetime component
+        if feature == "hour":
+            values = df_series.dt.hour
+        elif feature == "day":
+            values = df_series.dt.day
+        elif feature == "month":
+            values = df_series.dt.month
+        elif feature == "dayofweek":
+            values = df_series.dt.dayofweek
+        else:
+            raise ValueError
+
+        # Apply cyclical encoding: sin and cos transformations
+        max_val = max_vals[feature]
+        temp_df[f"{feature}_sin"] = np.sin(2 * np.pi * values / max_val)
+        temp_df[f"{feature}_cos"] = np.cos(2 * np.pi * values / max_val)
+
+    if include_year:
+        temp_df["year"] = df_series.dt.year
+
+    return temp_df
+
+
+def truncate_datetime_by_resolution(dt_series: pd.Series, resolution: str) -> pd.Series:
+    """Truncate datetime series to specified resolution for joining."""
+    if resolution == "exact":
+        return dt_series
+    elif resolution:
+        return dt_series.dt.to_period(resolution).dt.start_time
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
+
+
+def group_by_datetime_index(
+    df: pd.DataFrame,
+    resolution: str,
+    agg_functions: str | dict[str, str] | list[str] = "sum",
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Group a Dataframe by a specific resolution."""
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("The dataframe must have a DatetimeIndex as index")
+
+    if columns is None:
+        columns = df.select_dtypes(include=["number"]).columns.tolist()
+
+    df_subset = df[columns].copy()
+    truncated_dates = truncate_datetime_by_resolution(df.index.to_series(), resolution)
+    df_subset["_temp_date"] = truncated_dates
+
+    grouped = df_subset.groupby("_temp_date").agg(agg_functions)
+
+    grouped.index.name = "datetime"
+
+    return grouped
 
 
 if __name__ == "__main__":
