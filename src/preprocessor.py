@@ -1,6 +1,8 @@
+import gc
 import tempfile
 from pathlib import Path
 
+import dask
 import geopandas as gpd
 import leafmap.foliumap as leafmap
 import pandas as pd
@@ -57,8 +59,6 @@ def mask_regions(
     kwargs.setdefault("overlap", False)
     regions = regionmask.from_geopandas(mask_gdf, **kwargs)
 
-    print(regions.mask(_da[lon_name], _da[lat_name]))
-
     return regions.mask(_da[lon_name], _da[lat_name])
 
 
@@ -97,9 +97,7 @@ def extract_regional_means(
         lat_name=latitude,
         lon_name=longitude,
     )
-    print("Mask \n", mask)
     regional_means = da.groupby(mask).mean(dim=[latitude, longitude])
-    print("Reginoal Means\n", regional_means)
 
     # NOTE: This is a temporal fix
     if "isobaricInhPa" in regional_means.dims:
@@ -146,8 +144,15 @@ def _standardize_time_coord(
             return da.assign_coords(datetime=dataset[custom_time])
 
     # Case 2: Forecast-style
+    if "valid_time" in da.coords:
+        da = da.rename({"time": "datetime"})
+        da = da.assign_coords(datetime=da["valid_time"])
+        if "valid_time" in da.coords:
+            da = da.drop_vars("valid_time")
+        return da
+
+    # Case 3: Forecast-style with time/step/valid_time (stacking)
     if {"time", "step", "valid_time"}.issubset(da_coords):
-        # Only apply if dimensions allow stacking
         if "time" in dims and "step" in dims:
             da_stacked = da.stack(forecast_time=("time", "step"))
             valid_times = (
@@ -163,29 +168,19 @@ def _standardize_time_coord(
             ]
             return da.drop_vars([c for c in drop_coords if c in da.coords])
 
-        # If not in dims, maybe apply valid_time directly
-        if "valid_time" in dims:
-            return da.rename({"valid_time": "datetime"})
-
-        if "valid_time" in da.coords:
-            return da.assign_coords(datetime=da["valid_time"])
-
-        if dataset is not None and "valid_time" in dataset:
-            return da.assign_coords(datetime=dataset["valid_time"])
-
-    # Case 3: Simple time dimension
+    # Case 4: Simple time dimension
     if "time" in dims:
         return da.rename({"time": "datetime"})
 
-    # Case 4: Already standardized
+    # Case 5: Already standardized
     if "datetime" in dims or "datetime" in da.coords:
         return da
 
-    # Case 5: Cannot resolve
+    # Case 6: Cannot resolve
     msg = (
-        f"⛔ No recognized time coordinate found.\n"
+        f"⛔ No reconocida coordenada de tiempo.\n"
         f"  - dims: {dims}\n"
-        f"  - inferred coords: {sorted(da_coords)}"
+        f"  - coordenadas: {sorted(da_coords)}"
     )
     if warn_only:
         import warnings
@@ -283,7 +278,8 @@ def process_dataset(
             _ds=ds,
             _gdf=regions_chile,
             data_variable=var,
-            chunk_size={"latitude": 50, "longitude": 50},
+            chunk_size={"latitude": 25, "longitude": 25},
+            column_names="Comuna",
         )
 
         new_path = Path(path)
@@ -293,15 +289,17 @@ def process_dataset(
 
 
 def convert_ssrd_to_watts(
-    da: xr.Dataset,
+    da: xr.DataArray,
     accumulation_hours: int = 1,
-) -> xr.Dataset:
-    """Convert SSRD from J/m² to W/m²."""
-    # Convert from J/m² to W/m²
+) -> xr.DataArray:
+    """Convert SSRD from J/m² to W/m² with lazy evaluation."""
+    # Convert from J/m² to W/m² using lazy operations
     seconds_per_accumulation = accumulation_hours * 3600
+
+    # Create lazy computation
     da_watts = da / seconds_per_accumulation
 
-    # Update attributes
+    # Update attributes (this doesn't trigger computation)
     da_watts.attrs = da.attrs.copy()
     da_watts.attrs["units"] = "W m**-2"
 
@@ -325,56 +323,108 @@ def convert_ssrd_to_watts(
     return da_watts
 
 
+def process_dataset_optimized(
+    ds: xr.Dataset,
+    variables: list[str],
+    path: str | Path,
+    regions_gdf: gpd.GeoDataFrame,
+    column_names: str = "Comuna",
+    batch_size: int = 1,
+) -> list[Path] | None:
+    """Process dataset with memory optimization and batch processing."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    created_files = []
+
+    # Process variables in batches to manage memory
+    for i in range(0, len(variables), batch_size):
+        batch_vars = variables[i : i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}: {batch_vars}")
+
+        for var in batch_vars:
+            try:
+                # Extract only the needed variable
+                var_ds = ds[[var]]
+
+                temp_df = extract_regional_means(
+                    _ds=var_ds,
+                    _gdf=regions_gdf,
+                    data_variable=var,
+                    column_names=column_names,
+                )
+
+                filename = path / f"{var}_means.csv"
+                temp_df.to_csv(filename)
+                created_files.append(filename)
+
+                # Clean up
+                del temp_df, var_ds
+                gc.collect()
+
+            except Exception as e:
+                print(f"Error processing {var}: {e}")
+                continue
+
+    return created_files
+
+
 if __name__ == "__main__":
+    dask.config.set(
+        {
+            "array.chunk-size": "128 MB",
+            "distributed.worker.memory.target": 0.6,
+            "distributed.worker.memory.spill": 0.7,
+            "distributed.worker.memory.pause": 0.8,
+            "distributed.worker.memory.terminate": 0.9,
+        },
+    )
     # --- Declare Paths ---
     data_path = Path().cwd() / "data"
-    test_generation = (
-        data_path / "processed" / "public_data" / "generation_historic_tipo.csv"
-    )
 
     input_path = data_path / "1_preprocessing" / "input"
-    output_path = data_path / "1_preprocessing" / "output"
-
-    snowmelt_path = input_path / "snowmelt.grib"
-    runoff_path = input_path / "runoff.grib"
-    regions_chile_path = input_path / "Regiones" / "Regional.shp"
+    output_path = "/home/kyoumas/repos/ts_energy_patterns/data/2_pre-out_dec-in/hourly/"
+    ssrd_path = (
+        "/home/kyoumas/repos/ts_energy_patterns/data/1_pre-in/hourly/ssrd_hourly.grib"
+    )
+    regions_chile_path = (
+        "/home/kyoumas/repos/ts_energy_patterns/data/1_pre-in/masks/Comunas/comunas.shp"
+    )
 
     # --- Define test data ---
-    test_da = runoff_path
-    test_gdf = regions_chile_path
+    print("Loading regions...")
+    regions_chile = gpd.read_file(regions_chile_path)
 
-    regions_chile = gpd.read_file(test_gdf)
-
-    weather = xr.open_dataset(
-        test_da,
-        engine="cfgrib",
+    print("Opening dataset with chunking...")
+    weather = load_dataset(
+        ssrd_path,
         decode_timedelta=False,
-        # filter_by_keys={"shortName": "smlt"},
+        chunks="auto",  # Let xarray determine optimal chunking
     )
-    print(weather)
 
-    variables_to_extract = ["ro"]
+    variables_to_extract = ["ssrd"]
+
+    print("Filtering variables...")
     weather_filtered = weather[variables_to_extract]
 
-    # ssrd_watts = convert_ssrd_to_watts(
-    #     weather,
-    #     accumulation_hours=1,
-    # )
-
-    process_dataset(
-        weather_filtered,
-        variables=variables_to_extract,
-        path=output_path,
+    print("Converting to Watts (lazy operation)...")
+    # Convert the DataArray, not the Dataset
+    ssrd_watts_da = convert_ssrd_to_watts(
+        weather_filtered["ssrd"],
+        accumulation_hours=1,
     )
 
-    # --- Check datetime format processing ---
-    # temp_df = preprocessor.create_local_datetime(generation)
-    # temp_df.to_csv("generation_test.csv")
-    # logger.info("Datetime formatted done")
+    # Create new dataset with converted variable
+    ssrd_watts = xr.Dataset({"ssrd": ssrd_watts_da})
 
-    # --- Check cyclical encoding feature engineering ---
-    # temp_df = preprocessor.create_cyclical_encode(temp_df)
-    # temp_df.to_csv("feature_enginering_test.csv")
-    # logger.info("Cyclical encoding done")
+    print("Processing dataset with optimization...")
+    process_dataset_optimized(
+        ssrd_watts,
+        variables=variables_to_extract,
+        path=output_path,
+        regions_gdf=regions_chile,
+        column_names="Comuna",
+        batch_size=1,
+    )
 
-    # preprocessor.filter_by_date_range()
+    print("Processing complete!")
