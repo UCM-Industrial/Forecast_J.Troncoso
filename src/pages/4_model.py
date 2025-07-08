@@ -1,6 +1,10 @@
+import io
 import itertools
+import json
 import pickle
+from datetime import datetime
 from typing import Any
+from zipfile import ZipFile
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -92,17 +96,6 @@ def get_basic_param_grid(model_key: str) -> dict[str, list[Any]]:
         depth_param = "depth" if model_key == "catboost" else "max_depth"
         param_grid[depth_param] = list(range(depth_range[0], depth_range[1] + 1))
 
-        # lr_range = st.slider(
-        #     "Learning Rate range",
-        #     min_value=0.01,
-        #     max_value=0.5,
-        #     value=(0.05, 0.2),
-        #     step=0.01,
-        #     format="%.2f",
-        #     help="Step size shrinkage.",
-        # )
-
-        # param_grid["learning_rate"] = _create_range_list(lr_range, 0.01)
         param_grid["learning_rate"] = [
             float(x.strip())
             for x in st.text_input("Learning Rate", value="0.01, 0.2").split(",")
@@ -263,6 +256,7 @@ def render_latest_run() -> None:
         return
 
     run_info = st.session_state.latest_run
+    model = st.session_state.model
     st.subheader(f"Results for: {run_info['model_type']}")
     # st.write(run_info)
 
@@ -275,15 +269,38 @@ def render_latest_run() -> None:
         )
         st.metric("CV R² Score", f"{run_info['r2']:.4f}")
     with col2:
-        st.subheader("Save Model")
-        model = st.session_state.model
+        metadata = {
+            "model_type": run_info["model_type"],
+            "training_type": run_info["training_type"],
+            "training_timestamp_utc": datetime.utcnow().isoformat(),
+            "metrics": {
+                "mae": run_info.get("mae"),
+                "mse": run_info.get("mse"),
+                "r2": run_info.get("r2"),
+            },
+            "features": run_info["features"],
+            # "target": run_info[
+            #     "target_col"
+            # ],
+            "model_params": run_info["params"],
+        }
 
+        # 2. Serializar el modelo y los metadatos
         pkl_bytes = pickle.dumps(model)
+        json_bytes = json.dumps(metadata, indent=4).encode("utf-8")
+
+        # 3. Crear un archivo ZIP en memoria
+        zip_buffer = io.BytesIO()
+        with ZipFile(zip_buffer, "w") as zip_file:
+            zip_file.writestr("model.pkl", pkl_bytes)
+            zip_file.writestr("metadata.json", json_bytes)
+
+        # 4. ZIP to download
         st.download_button(
-            label="Download model as .pkl",
-            data=pkl_bytes,
-            file_name="model.pkl",
-            mime="application/octet-stream",
+            label="Download Model Bundle (.zip)",
+            data=zip_buffer.getvalue(),
+            file_name=f"{run_info['model_type']}_bundle.zip",
+            mime="application/zip",
         )
 
     # Plot predictions
