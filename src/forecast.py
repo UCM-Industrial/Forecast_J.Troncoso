@@ -3,6 +3,7 @@ import logging
 import pickle
 import shutil
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ DATE = datetime.utcnow().strftime("%Y%m%d")
 HOUR = "06"  # "00", "06", "12", "18"
 
 BASE_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl"
+ARCHIVE_BASE_URL = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"
+
 VARS = {
     "var_DSWRF": "on",
     "var_UGRD": "on",
@@ -36,9 +39,10 @@ LEVELS = {
     "lev_surface": "on",
 }
 REGION = {
-    "toplat": "-15",
+    "subregion": "on",
     "leftlon": "-76",
     "rightlon": "-66",
+    "toplat": "-15",
     "bottomlat": "-56",
 }
 OUT_NETCDF = "forecast_14days.nc"
@@ -68,7 +72,8 @@ def download_gfs_data(
     date: str = DATE,
     hour: str = HOUR,
     future_hours: int = 384,
-):
+    delay_seconds: float = 1.0,
+) -> list[Path]:
     """Request climate data from GFS from today to `future_hours` ahead."""
     downloaded_files = []
 
@@ -91,13 +96,14 @@ def download_gfs_data(
         dest = temp_dir / filename
 
         try:
-            response = requests.get(BASE_URL, params=params, timeout=10)
+            response = requests.get(BASE_URL, params=params, timeout=(10, 2))
+            print(response.url)
             if (
                 response.status_code == 200 and len(response.content) > 10_000
             ):  # avoid saving HTML error pages
                 dest.write_bytes(response.content)
                 downloaded_files.append(dest)
-                print(f"Downloaded: {filename}")
+                # print(f"Downloaded: {filename}")
             else:
                 print(
                     f"Skipped (bad response): {filename} | Status: {response.status_code} | Size: {len(response.content)} bytes",
@@ -106,10 +112,12 @@ def download_gfs_data(
         except requests.exceptions.RequestException as e:
             print(f"Error downloading {filename}: {e}")
             continue
+        time.sleep(delay_seconds)
 
     return downloaded_files
 
 
+# WARNING: Deprecated because it is unnecesary
 def create_netcdf_file_optimized(
     temp_dir: Path,
     grib_files: list[Path] | None = None,
@@ -194,6 +202,7 @@ def create_netcdf_file_optimized(
         )
 
 
+# WARNING: Deprecated because it is unnecesary
 def _create_netcdf_batch_method(
     grib_files: list[Path],
     output_path: Path,
@@ -258,6 +267,67 @@ def _create_netcdf_batch_method(
     if failed_files:
         logger.warning(f"Failed to process {len(failed_files)} files")
 
+    return output_path
+
+
+def create_netcdf_file(
+    temp_dir: Path,
+    grib_files: list[Path] | None = None,
+    output_path: Path | None = None,
+) -> Path:
+    """Create NetCDF file from GRIB files.
+
+    Args:
+        temp_dir: Directory containing GRIB files
+        grib_files: List of GRIB files to process. If None, searches temp_dir
+        output_path: Output NetCDF file path. If None, saves to temp_dir
+
+    Returns:
+        Path to created NetCDF file
+    """
+    if grib_files is None:
+        grib_files = sorted(temp_dir.glob("*.f???"))
+
+    if not grib_files:
+        raise ValueError("No GRIB files found to process")
+
+    if output_path is None:
+        output_path = temp_dir / "forecast_14days.nc"
+
+    logger.info(f"Processing {len(grib_files)} GRIB files")
+
+    # Simple approach: open all files and concatenate
+    try:
+        dataset = xr.open_mfdataset(
+            grib_files,
+            engine="cfgrib",
+            concat_dim="time",
+            combine="nested",
+            backend_kwargs={"indexpath": ""},
+            preprocess=lambda ds: ds.sortby("time")
+            if "time" in ds.dims and ds.time.ndim == 1
+            else ds,
+        )
+    except Exception as e:
+        logger.warning(f"Failed with sortby, trying without preprocessing: {e}")
+        dataset = xr.open_mfdataset(
+            grib_files,
+            engine="cfgrib",
+            concat_dim="time",
+            combine="nested",
+            backend_kwargs={"indexpath": ""},
+        )
+
+    # Save to NetCDF with basic compression
+    logger.info(f"Saving NetCDF file: {output_path}")
+    dataset.to_netcdf(
+        output_path,
+        encoding={var: {"zlib": True} for var in dataset.data_vars},
+        engine="netcdf4",
+    )
+
+    dataset.close()
+    logger.info("NetCDF file created successfully")
     return output_path
 
 
@@ -392,12 +462,13 @@ def predict(model: Any, data: pd.DataFrame) -> pd.DataFrame:
 
 def run_etl_pipeline(temporal_path: Path) -> tuple[Path, Path]:
     download_gfs_data(temporal_path / "download")
-    create_netcdf_file_optimized(
+    create_netcdf_file(
         temp_dir=temporal_path / "download",
-        output_path=temporal_path,
+        output_path=temporal_path / "forecast_14days.nc",
     )
 
     # Create csv's for the ML models
+    logger.info("Creating wind regions")
     create_regional_csv(
         temporal_path / "forecast_14days.nc",
         temporal_path / "wind",
@@ -406,6 +477,8 @@ def run_etl_pipeline(temporal_path: Path) -> tuple[Path, Path]:
             "v100",
         ],
     )
+
+    logger.info("Creating solar regions")
     create_regional_csv(
         temporal_path / "forecast_14days.nc",
         temporal_path / "solar",
@@ -413,7 +486,6 @@ def run_etl_pipeline(temporal_path: Path) -> tuple[Path, Path]:
             "sdswrf",
         ],
     )
-
     wind_df = prepare_ml_features(
         temporal_path / "wind",
         technology="wind",
@@ -435,13 +507,15 @@ if __name__ == "__main__":
     temporal_path = Path().cwd() / "forecast_temp"
     temporal_path.mkdir(exist_ok=True)
 
-    wind_data_path, solar_data_path = run_etl_pipeline(temporal_path)
+    print(download_gfs_data(temporal_path))
+
+    # wind_data_path, solar_data_path = run_etl_pipeline(temporal_path)
     # wind_data_path = (
     #     "/home/kyoumas/repos/ts_energy_patterns/forecast_temp/wind_features.csv"
     # )
 
-    wind_data = read_csv_with_datetime(wind_data_path)
+    # wind_data = read_csv_with_datetime(wind_data_path)
     # solar_model = load_model(temporal_path / "models" / "solar.pkl")
-    wind_model = load_model(temporal_path / "models" / "eolica.pkl")
+    # wind_model = load_model(temporal_path / "models" / "eolica.pkl")
 
-    print(wind_model.predict(wind_data))
+    # print(wind_model.predict(wind_data))
