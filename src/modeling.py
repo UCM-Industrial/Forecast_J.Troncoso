@@ -512,6 +512,11 @@ def create_forecast_vs_actual(
     """Plot actual vs predicted values with optional uncertainty."""
     fig = go.Figure()
 
+    actual_color = "#93C7F9"
+    predicted_color = "#2A66C2"
+    predicted_fillcolor = "rgba(51, 51, 51, 0.2)"
+
+    # Actual line color (works well in both light/dark themes)
     # Add uncertainty band if present
     if "predicted_lower" in df.columns and "predicted_upper" in df.columns:
         fig.add_trace(
@@ -520,7 +525,7 @@ def create_forecast_vs_actual(
                 y=df["predicted_upper"],
                 mode="lines",
                 line=dict(width=0),
-                name="Upper Bound",
+                name="Upper Bound Uncertainty",
                 showlegend=False,
             ),
         )
@@ -530,38 +535,37 @@ def create_forecast_vs_actual(
                 y=df["predicted_lower"],
                 mode="lines",
                 line=dict(width=0),
-                fillcolor="rgba(68, 68, 68, 0.2)",
+                fillcolor=predicted_fillcolor,
                 fill="tonexty",
-                name="Uncertainty Interval",
+                name="Bottom Bound Uncertainty",
                 showlegend=False,
             ),
         )
 
-    # Add actual and predicted lines
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df[actual_col],
-            mode="lines",
-            name="Actual",
-            # line=dict(color="royalblue", width=2),
-        ),
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df[predicted_col],
-            mode="lines",
-            name="Predicted",
-            line=dict(color="crimson"),
-        ),
-    )
-
+        # Add actual and predicted lines
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df[actual_col],
+                mode="lines",
+                name="Actual",
+                line=dict(color=actual_color),  # noqa: C408
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df[predicted_col],
+                mode="lines",
+                name="Predicted",
+                line=dict(color=predicted_color),  # noqa: C408
+            ),
+        )
     fig.update_layout(
         title=title,
         xaxis_title="Date",
         yaxis_title="Generation (MWh)",
-        legend=dict(x=0.01, y=0.99),
+        legend=dict(x=0.01, y=0.99),  # noqa: C408
     )
 
     return fig

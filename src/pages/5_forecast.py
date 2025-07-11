@@ -19,7 +19,7 @@ TEMP_DIR.mkdir(exist_ok=True)
 MODELS_CONFIG = {
     "Wind": {
         "bundle_path": TEMP_DIR / "models" / "eolica_bundle.zip",
-        "color": "#636EFA",
+        "color": "#2A66C2",
     },
     "Solar": {
         "bundle_path": TEMP_DIR / "models" / "solar_bundle.zip",

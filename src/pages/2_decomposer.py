@@ -6,22 +6,24 @@ import streamlit as st
 
 from _util import read_csv_with_datetime
 from decomposer import (
+    calculate_average_seasonal_pattern,
+    calculate_residual_covariance,
     create_decomposition_figure,
     detect_granularity,
     format_granularity_info,
+    plot_average_seasonal_pattern,
+    plot_covariance_matrix,
     plot_residual_distribution,
     run_mstl,
     run_stl,
     test_residual_properties,
 )
 
-# Configure page
-# st.set_page_config(
-#     page_title="Time Series Decomposition",
-#     layout="wide",
-# )
-
-st.session_state.decomposed_df = None
+# --- Initialize session state ---
+if "decomposed_df" not in st.session_state:
+    st.session_state.decomposed_df = None
+if "decomposition_params" not in st.session_state:
+    st.session_state.decomposition_params = {}
 
 
 @st.cache_data
@@ -30,7 +32,6 @@ def load_and_process_data(uploaded_file) -> pd.DataFrame:
     return read_csv_with_datetime(uploaded_file)
 
 
-# Cache decomposition results to avoid re-computation
 @st.cache_data
 def cached_run_stl(
     series: pd.Series,
@@ -53,37 +54,17 @@ def run_multi_column_stl(
     period: int,
     seasonal_window: int,
 ) -> pd.DataFrame:
-    """Run STL decomposition on multiple columns and combine results.
-
-    Args:
-        df: DataFrame containing the time series data
-        columns: List of column names to decompose
-        period: Seasonal period for STL
-        seasonal_window: Seasonal window for STL
-
-    Returns:
-        Combined DataFrame with all decomposition results
-    """
+    """Run STL decomposition on multiple columns and combine results."""
     all_results = []
-
     for col in columns:
         series = df[col]
         result_df = cached_run_stl(series, period, seasonal_window)
-
-        # Rename columns to include original column name
-        renamed_columns = {}
-        for component in result_df.columns:
-            if component == "observed":
-                renamed_columns[component] = f"observed_{col}"
-            else:
-                renamed_columns[component] = f"{component}_{col}"
-
-        result_df = result_df.rename(columns=renamed_columns)
-        all_results.append(result_df)
-
-    # Combine all results
-    combined_df = pd.concat(all_results, axis=1)
-    return combined_df
+        renamed_columns = {
+            comp: f"observed_{col}" if comp == "observed" else f"{comp}_{col}"
+            for comp in result_df.columns
+        }
+        all_results.append(result_df.rename(columns=renamed_columns))
+    return pd.concat(all_results, axis=1)
 
 
 def run_multi_column_mstl(
@@ -91,36 +72,17 @@ def run_multi_column_mstl(
     columns: list[str],
     periods: list[int],
 ) -> pd.DataFrame:
-    """Run MSTL decomposition on multiple columns and combine results.
-
-    Args:
-        df: DataFrame containing the time series data
-        columns: List of column names to decompose
-        periods: List of seasonal periods for MSTL
-
-    Returns:
-        Combined DataFrame with all decomposition results
-    """
+    """Run MSTL decomposition on multiple columns and combine results."""
     all_results = []
-
     for col in columns:
         series = df[col]
         result_df = cached_run_mstl(series, periods)
-
-        # Rename columns to include original column name
-        renamed_columns = {}
-        for component in result_df.columns:
-            if component == "observed":
-                renamed_columns[component] = f"observed_{col}"
-            else:
-                renamed_columns[component] = f"{component}_{col}"
-
-        result_df = result_df.rename(columns=renamed_columns)
-        all_results.append(result_df)
-
-    # Combine all results
-    combined_df = pd.concat(all_results, axis=1)
-    return combined_df
+        renamed_columns = {
+            comp: f"observed_{col}" if comp == "observed" else f"{comp}_{col}"
+            for comp in result_df.columns
+        }
+        all_results.append(result_df.rename(columns=renamed_columns))
+    return pd.concat(all_results, axis=1)
 
 
 def parse_periods(periods_str: str) -> list[int] | None:
@@ -148,21 +110,15 @@ def render_data_section(df: pd.DataFrame):
         with st.expander("Data Preview", expanded=False):
             st.dataframe(df.head(10))
 
-        # Multi-column selection option
         st.subheader("Column Selection")
-
-        # Toggle for single vs multiple columns
         multi_column_mode = st.checkbox(
             "Decompose multiple columns",
-            value=True,  # Default to True as requested
+            value=True,
             help="Enable to select and decompose multiple columns simultaneously",
         )
 
         if multi_column_mode:
-            # Multi-select for columns
-            numeric_columns = df.select_dtypes(
-                include=["float64", "int64"],
-            ).columns.tolist()
+            numeric_columns = df.select_dtypes(include=["number"]).columns.tolist()
             if not numeric_columns:
                 st.error("No numeric columns found in the dataset.")
                 return None, None, None
@@ -170,9 +126,7 @@ def render_data_section(df: pd.DataFrame):
             selected_columns = st.multiselect(
                 "Select columns for decomposition:",
                 numeric_columns,
-                default=numeric_columns[:2]
-                if len(numeric_columns) >= 2
-                else numeric_columns,
+                default=numeric_columns[: min(2, len(numeric_columns))],
                 help="Select one or more numeric columns to decompose",
             )
 
@@ -180,45 +134,23 @@ def render_data_section(df: pd.DataFrame):
                 st.warning("Please select at least one column for decomposition.")
                 return None, None, None
 
-            # Show granularity info for the first selected column as reference
             if selected_columns:
-                reference_series = df[selected_columns[0]]
-                granularity, confidence, details = detect_granularity(reference_series)
-                granularity_info = format_granularity_info(
-                    granularity,
-                    confidence,
-                    details,
+                granularity, confidence, details = detect_granularity(
+                    df[selected_columns[0]],
                 )
                 st.info(
-                    f"Granularity info (based on '{selected_columns[0]}'): {granularity_info}",
+                    f"Granularity (based on '{selected_columns[0]}'): "
+                    f"{format_granularity_info(granularity, confidence, details)}",
                 )
-
             return df, selected_columns, True
-
         else:
-            # Single column selection (original behavior)
             column = st.selectbox("Select column for decomposition:", df.columns)
-
             if column:
                 series = df[column]
-
-                if not isinstance(series, pd.Series):
-                    raise TypeError(
-                        f"Expected a pandas Series but got {type(series).__name__}.",
-                    )
-
                 granularity, confidence, details = detect_granularity(series)
-                granularity_info = format_granularity_info(
-                    granularity,
-                    confidence,
-                    details,
-                )
-                st.info(granularity_info)
-
+                st.info(format_granularity_info(granularity, confidence, details))
                 return df, [column], False
-
-            return None, None, None
-
+        return None, None, None
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return None, None, None
@@ -227,70 +159,67 @@ def render_data_section(df: pd.DataFrame):
 def render_stl_section(df: pd.DataFrame, columns: list[str], is_multi_mode: bool):
     """Render STL decomposition section."""
     st.header("STL Parameters")
-
     col1, col2 = st.columns(2)
-    with col1:
-        period = st.number_input(
-            "Seasonal Period",
-            value=24,
-            min_value=2,
-            help="Number of observations per seasonal cycle. Common values: 24 (daily with hourly data), 12 (yearly with monthly data), 7 (weekly with daily data)",
-        )
-    with col2:
-        seasonal_window = st.number_input(
-            "Seasonal Window",
-            value=169,
-            min_value=3,
-            step=2,
-        )
+    period = col1.number_input(
+        "Seasonal Period",
+        value=24,
+        min_value=2,
+        help="Observations per cycle (e.g., 24 for hourly data, 7 for daily).",
+    )
+    seasonal_window = col2.number_input(
+        "Seasonal Window",
+        value=169,
+        min_value=3,
+        step=2,
+        help="Must be odd. A larger value means a smoother seasonal component.",
+    )
 
-    # Validate parameters
     valid, error_msg = validate_stl_params(period, seasonal_window)
     if not valid:
         st.error(error_msg)
         return
 
-    # Show selected columns info
     if is_multi_mode and len(columns) > 1:
         st.info(f"Selected columns for decomposition: {', '.join(columns)}")
 
     if st.button("Run STL", type="primary"):
+        st.session_state.decomposition_params = {
+            "type": "stl",
+            "period": period,
+            "columns": columns,
+            "is_multi_mode": is_multi_mode,
+        }
         run_stl_decomposition(df, columns, period, seasonal_window, is_multi_mode)
 
 
 def render_mstl_section(df: pd.DataFrame, columns: list[str], is_multi_mode: bool):
     """Render MSTL decomposition section."""
     st.header("MSTL Parameters")
-
     st.warning(
-        "**Performance Notice**: MSTL decomposition is computationally intensive. "
-        "Processing time may be significantly longer for large datasets, "
-        "multiple seasonal periods, or high-precision calculations. "
-        "Consider testing with smaller samples first.",
+        "**Performance Notice**: MSTL can be slow on large datasets.",
     )
-
     periods_str = st.text_input(
         "Seasonal Periods (comma-separated)",
-        value="24, 168",
-        help="Enter seasonal periods separated by commas. Examples: '24' (daily), '24,168' (daily+weekly), '12,4' (monthly+quarterly)",
+        "24, 168",
+        help="e.g., '24, 168' for daily and weekly patterns in hourly data.",
     )
 
     periods = parse_periods(periods_str)
-    if periods is None:
-        st.error("Invalid periods format. Please enter comma-separated integers.")
-        return
-
-    if len(periods) == 0:
-        st.error("Please enter at least one seasonal period.")
+    if not periods:
+        st.error("Invalid periods. Please enter comma-separated integers.")
         return
 
     st.info(f"Seasonal periods: {periods}")
-
-    # Show selected columns info
     if is_multi_mode and len(columns) > 1:
         st.info(f"Selected columns for decomposition: {', '.join(columns)}")
 
     if st.button("Run MSTL", type="primary"):
+        st.session_state.decomposition_params = {
+            "type": "mstl",
+            "periods": periods,
+            "columns": columns,
+            "is_multi_mode": is_multi_mode,
+        }
         run_mstl_decomposition(df, columns, periods, is_multi_mode)
 
 
@@ -303,18 +232,15 @@ def run_stl_decomposition(
 ):
     """Execute STL decomposition and display results."""
     try:
-        with st.spinner(f"Running STL decomposition on {len(columns)} column(s)..."):
-            if is_multi_mode and len(columns) > 1:
-                result_df = run_multi_column_stl(df, columns, period, seasonal_window)
-            else:
-                # Single column decomposition
-                series = df[columns[0]]
-                result_df = cached_run_stl(series, period, seasonal_window)
-
+        with st.spinner(f"Running STL on {len(columns)} column(s)..."):
+            result_df = (
+                run_multi_column_stl(df, columns, period, seasonal_window)
+                if is_multi_mode and len(columns) > 1
+                else cached_run_stl(df[columns[0]], period, seasonal_window)
+            )
         st.session_state.decomposed_df = result_df
         st.success("STL Decomposition Complete!")
         display_results(result_df, "stl", columns, is_multi_mode)
-
     except Exception as e:
         st.error(f"STL decomposition failed: {e}")
 
@@ -327,20 +253,18 @@ def run_mstl_decomposition(
 ):
     """Execute MSTL decomposition and display results."""
     try:
-        with st.spinner(f"Running MSTL decomposition on {len(columns)} column(s)..."):
-            if is_multi_mode and len(columns) > 1:
-                result_df = run_multi_column_mstl(df, columns, periods)
-            else:
-                # Single column decomposition
-                series = df[columns[0]]
-                result_df = cached_run_mstl(series, periods)
-
+        with st.spinner(f"Running MSTL on {len(columns)} column(s)..."):
+            result_df = (
+                run_multi_column_mstl(df, columns, periods)
+                if is_multi_mode and len(columns) > 1
+                else cached_run_mstl(df[columns[0]], periods)
+            )
         st.session_state.decomposed_df = result_df
         st.success("MSTL Decomposition Complete!")
         display_results(result_df, "mstl", columns, is_multi_mode)
-
     except Exception as e:
         st.error(f"MSTL decomposition failed: {e}")
+        st.write(e)
 
 
 def display_results(
@@ -350,52 +274,38 @@ def display_results(
     is_multi_mode: bool,
 ):
     """Display decomposition results and provide download option."""
-    # Results preview in expander
     with st.expander("Results Preview", expanded=False):
         st.dataframe(result_df.head(10))
 
-    # Create and display figure
     with st.spinner("Creating visualization..."):
         if is_multi_mode and len(columns) > 1:
-            # For multi-column, create separate plots for each column
             for i, col in enumerate(columns):
-                # Display only first 6 decompositions
-                if i < 2:
-                    st.subheader(f"Decomposition for: {col}")
-
-                    # Filter columns for this specific original column
-                    col_columns = [
-                        c for c in result_df.columns if c.endswith(f"_{col}")
-                    ]
-                    col_df = result_df[col_columns]
-
-                    # Rename columns back to standard names for plotting
-                    renamed_cols = {}
-                    for c in col_columns:
-                        if c.startswith("observed_"):
-                            renamed_cols[c] = "observed"
-                        else:
-                            component = c.replace(f"_{col}", "")
-                            renamed_cols[c] = component
-
-                    col_df_renamed = col_df.rename(columns=renamed_cols)
-
-                    fig = create_decomposition_figure(
-                        col_df_renamed,
-                        decomposition_type,
+                if i >= 2:  # Limit to showing first 2 plots for performance
+                    st.info(
+                        f"Hiding remaining {len(columns) - i} plots. "
+                        "All data is available for download.",
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    break
+                st.subheader(f"Decomposition for: {col}")
+                col_columns = [c for c in result_df.columns if c.endswith(f"_{col}")]
+                col_df = result_df[col_columns]
+                renamed_cols = {
+                    c: c.replace(f"_{col}", "")
+                    if c.startswith("observed") is False
+                    else "observed"
+                    for c in col_columns
+                }
+                fig = create_decomposition_figure(
+                    col_df.rename(columns=renamed_cols),
+                    decomposition_type,
+                )
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            # Single column visualization
             fig = create_decomposition_figure(result_df, decomposition_type)
             st.plotly_chart(fig, use_container_width=True)
 
-    # Download section
     st.header("Download Results")
-
-    separate_files = st.toggle("Download components separately (as ZIP)", value=True)
-
-    # Define a common suffix for filenames
+    separate_files = st.toggle("Download components separately (ZIP)", value=True)
     filename_suffix = (
         f"_{'_'.join(columns)}"
         if is_multi_mode and len(columns) > 1
@@ -403,94 +313,182 @@ def display_results(
     )
 
     if separate_files:
-        # Option 1: Download a ZIP with separate CSVs for each component
         zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_f:
-            # Filter and write each component to the zip file
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for component in ["seasonal", "trend", "resid"]:
-                component_df = result_df.filter(like=component)
-                csv_bytes = component_df.to_csv(index=True).encode("utf-8")
-                zip_f.writestr(f"{component}{filename_suffix}.csv", csv_bytes)
-
+                comp_df = result_df.filter(like=component)
+                zf.writestr(
+                    f"{component}{filename_suffix}.csv",
+                    comp_df.to_csv(index=True).encode("utf-8"),
+                )
         st.download_button(
-            label="Download Components ZIP",
-            data=zip_buffer.getvalue(),
-            file_name=f"{decomposition_type}_components{filename_suffix}.zip",
-            mime="application/zip",
+            "Download Components ZIP",
+            zip_buffer,
+            f"{decomposition_type}_components{filename_suffix}.zip",
+            "application/zip",
         )
     else:
-        # Option 2 (Default): Download a single CSV with all data
         output_csv = result_df.to_csv(index=True).encode("utf-8")
         st.download_button(
-            label="Download Combined CSV",
-            data=output_csv,
-            file_name=f"{decomposition_type}_decomposition{filename_suffix}.csv",
-            mime="text/csv",
+            "Download Combined CSV",
+            output_csv,
+            f"{decomposition_type}_decomposition{filename_suffix}.csv",
+            "text/csv",
         )
 
 
-def render_validation(
-    df: pd.DataFrame,
-    is_multi_mode: bool,
-    resid_name: str = "resid",
-) -> None:
-    if is_multi_mode:
-        st.warning("Test are only avialable for single column decomposition")
+def render_validation_tab(decomposed_df: pd.DataFrame, params: dict):
+    """Logic for the validation, test and covariance resid decomposition."""
+    st.header("Residuals Analysis")
+    columns = params.get("columns", [])
+    is_multi_mode = params.get("is_multi_mode", False)
+
+    if is_multi_mode and len(columns) > 1:
+        selected_col = st.selectbox(
+            "Select column to analyze its residuals:",
+            options=columns,
+        )
+        resid_col_name = f"resid_{selected_col}"
+        df_to_test = pd.DataFrame({"resid": decomposed_df[resid_col_name]})
     else:
-        results = test_residual_properties(df)
+        selected_col = columns[0]
+        resid_col_name = "resid"
+        df_to_test = decomposed_df
 
-        st.subheader("Stationarity Test Results")
+    st.subheader(f"Analysis for: `{selected_col}`")
+    if resid_col_name in decomposed_df.columns:
+        results = test_residual_properties(df_to_test)
+        st.markdown("##### Stationarity Tests")
         col1, col2 = st.columns(2)
-        # ADF Test
-        with col1:
-            st.markdown("##### Augmented Dickey-Fuller (ADF) Test")
-            adf_data = results["adf_test"]
+        adf = results.get("adf_test", {})
+        col1.metric(
+            "ADF p-value",
+            f"{adf.get('p_value', 99):.4f}",
+            adf.get("interpretation", "Error"),
+            border=True,
+        )
+        kpss = results.get("kpss_test", {})
+        col2.metric(
+            "KPSS p-value",
+            f"{kpss.get('p_value', 99):.4f}",
+            kpss.get("interpretation", "Error"),
+            border=True,
+        )
 
-            # Display interpretation with a colored box for quick insights
-            if adf_data["interpretation"] == "Stationary":
-                st.success(f"Interpretation: **{adf_data['interpretation']}**")
-            else:
-                st.warning(f"Interpretation: **{adf_data['interpretation']}**")
+        st.markdown("##### Distribution")
+        fig_dist = plot_residual_distribution(df_to_test["resid"])
+        st.plotly_chart(fig_dist, use_container_width=True)
+    else:
+        st.warning(f"No residual data found for '{selected_col}'.")
 
-            # Use st.metric for key numerical values
-            st.metric(label="Test Statistic", value=f"{adf_data['test_statistic']:.4f}")
-            st.metric(
-                label="P-Value",
-                value=f"{adf_data['p_value']:.4f}"
-                if adf_data["p_value"] > 0.0001
-                else "< 0.0001",
-            )
-
-            # Hide less critical details in an expander
-            with st.expander("See test details"):
-                st.write("Critical Values:", adf_data["critical_values"])
-                st.info(
-                    f"Observations: {adf_data['n_observations']} | Lags Used: {adf_data['used_lags']}",
+    if is_multi_mode and len(columns) > 1:
+        with st.expander("View Residuals Covariance Matrix"):
+            residuals_df = decomposed_df.filter(like="resid")
+            residuals_df.columns = [
+                c.replace("resid_", "") for c in residuals_df.columns
+            ]
+            if not residuals_df.empty:
+                fig_cov = plot_covariance_matrix(
+                    calculate_residual_covariance(residuals_df),
                 )
+                st.plotly_chart(fig_cov, use_container_width=True)
 
-        # KPSS Test
-        with col2:
-            st.markdown("##### Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test")
-            kpss_data = results["kpss_test"]
 
-            if kpss_data["interpretation"] == "Stationary":
-                st.success(f"Interpretation: **{kpss_data['interpretation']}**")
+def render_patterns_tab(decomposed_df: pd.DataFrame, params: dict):
+    """Logic for the seasonal patterns exploration."""
+    st.header("Average Seasonal Pattern Explorer")
+    columns = params.get("columns", [])
+    is_multi_mode = params.get("is_multi_mode", False)
+    decomp_type = params.get("type")
+
+    selected_col = columns[0]
+    smoth = st.toggle("Smoother Pattern")
+    if is_multi_mode and len(columns) > 1:
+        selected_col = st.selectbox("Select column to view patterns:", options=columns)
+
+    if decomp_type == "stl":
+        available_periods = [params.get("period")]
+    else:  # mstl
+        available_periods = params.get("periods", [])
+
+    if not available_periods or available_periods[0] is None:
+        st.warning("No seasonal periods available for analysis.")
+        return
+
+    selected_period = st.selectbox("Select seasonal period:", options=available_periods)
+
+    st.subheader(f"Pattern for `{selected_col}` with period `{selected_period}`")
+
+    seasonal_col_name = "seasonal"
+    if len(available_periods) > 1:
+        seasonal_col_name += f"_{selected_period}"
+
+    if is_multi_mode and len(columns) > 1:
+        seasonal_col_name += f"_{selected_col}"
+
+    if seasonal_col_name in decomposed_df:
+        avg_pattern = calculate_average_seasonal_pattern(
+            decomposed_df[seasonal_col_name],
+            selected_period,
+            smoothing=smoth,
+            # window=7,
+        )
+        fig_pattern = plot_average_seasonal_pattern(avg_pattern, selected_period)
+        st.plotly_chart(fig_pattern, use_container_width=True)
+
+    else:
+        st.error(
+            f"Could not find data for the selected combination. Column name searched: `{seasonal_col_name}`",
+        )
+
+    st.header("Download Patterns")
+    if st.button("Prepare all patterns for download"):
+        with st.spinner("Calculating all average patterns..."):
+            params["smoth_pattern"] = smoth
+            all_patterns_df = generate_all_patterns_df(decomposed_df, params)
+            if not all_patterns_df.empty:
+                csv = all_patterns_df.to_csv(index_label="timestep").encode("utf-8")
+                st.download_button(
+                    label="Download All Patterns as CSV",
+                    data=csv,
+                    file_name="average_seasonal_patterns.csv",
+                    mime="text/csv",
+                )
             else:
-                st.warning(f"Interpretation: **{kpss_data['interpretation']}**")
+                st.warning("No patterns were generated.")
 
-            st.metric(
-                label="Test Statistic",
-                value=f"{kpss_data['test_statistic']:.4f}",
-            )
-            st.metric(label="P-Value", value=f"{kpss_data['p_value']:.4f}")
 
-            with st.expander("See test details"):
-                st.write("Critical Values:", kpss_data["critical_values"])
-                st.info(f"Lags Used: {kpss_data['lags']}")
+def generate_all_patterns_df(decomposed_df: pd.DataFrame, params: dict):
+    """Calculate all the means for the seasonals patterns for each decomposition."""
+    all_patterns = {}
+    columns = params.get("columns", [])
+    is_multi_mode = params.get("is_multi_mode", False)
+    smoth_pattern = params.get("smoth_pattern", False)
+    periods = (
+        params.get("periods")
+        if params.get("type") == "mstl"
+        else [params.get("period")]
+    )
 
-        # Distribution
-        fig = plot_residual_distribution(df[resid_name])
-        st.plotly_chart(fig)
+    for col in columns:
+        for period in periods:
+            seasonal_col = "seasonal"
+
+            if len(periods) > 1:
+                seasonal_col += f"_{period}"
+
+            if is_multi_mode and len(columns) > 1:
+                seasonal_col += f"_{col}"
+
+            if seasonal_col in decomposed_df:
+                pattern = calculate_average_seasonal_pattern(
+                    decomposed_df[seasonal_col],
+                    period,
+                    smoothing=smoth_pattern,
+                )
+                all_patterns[f"pattern_{col}_period_{period}"] = pattern
+
+    return pd.DataFrame(all_patterns)
 
 
 def main():
@@ -501,43 +499,44 @@ def main():
     with st.sidebar:
         st.header("Data Upload")
         uploaded_file = st.file_uploader("Upload your time series CSV", type="csv")
-
         if not uploaded_file:
-            st.info("Please upload a CSV file to begin decomposition.")
+            st.info("Please upload a CSV file to begin.")
             return
+        df = load_and_process_data(uploaded_file)
 
-        with st.spinner("Loading data..."):
-            df = load_and_process_data(uploaded_file)
-            st.success("Data loaded successfully")
-
-    # Data upload section
-    tab1, tab2 = st.tabs(["Decompose", "Validation"])
+    tab1, tab2, tab3 = st.tabs(["Decompose", "Validation", "Patterns"])
 
     with tab1:
         result = render_data_section(df=df)
-        if result[0] is None:
+        if not result or not result[0] is not None:
             return
-
         df, columns, is_multi_mode = result
 
-        # Decomposition type selection
         st.header("Decomposition Method")
-        decomp_type = st.radio(
-            "Choose decomposition method:",
-            ["STL", "MSTL"],
-            horizontal=True,
-        )
+        decomp_type = st.radio("Choose method:", ["STL", "MSTL"], horizontal=True)
 
-        # Render appropriate section based on selection
         if decomp_type == "STL":
             render_stl_section(df, columns, is_multi_mode)
         else:
             render_mstl_section(df, columns, is_multi_mode)
+
     with tab2:
         if st.session_state.decomposed_df is None:
+            st.info("Run a decomposition first to see validation results.")
             return
         else:
-            render_validation(st.session_state.decomposed_df, is_multi_mode)
+            render_validation_tab(
+                st.session_state.decomposed_df,
+                st.session_state.decomposition_params,
+            )
+    with tab3:
+        if st.session_state.decomposed_df is None:
+            st.info("Run a decomposition first to explore patterns.")
+        else:
+            render_patterns_tab(
+                st.session_state.decomposed_df,
+                st.session_state.decomposition_params,
+            )
 
 
 if __name__ == "__main__":

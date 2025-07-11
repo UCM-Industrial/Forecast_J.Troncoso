@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.signal import savgol_filter
 from statsmodels.tsa.seasonal import MSTL, STL, DecomposeResult
 from statsmodels.tsa.stattools import acf, adfuller, kpss, pacf  # noqa: F401
 
@@ -94,6 +95,100 @@ def run_stl(
     ).fit()
 
     return _format_decomposition_result(stl_result)
+
+
+# --- Pattern ---
+
+
+# WARNING: If the window its too similar to the period, the smoth could affect the values
+def calculate_average_seasonal_pattern(
+    seasonal_component: pd.Series,
+    period: int,
+    smoothing: bool = False,
+    method: str = "moving_average",
+    window: int = 5,
+    polyorder: int = 2,
+) -> pd.Series:
+    """Calculates the average pattern for a given seasonal component.
+
+    Args:
+        seasonal_component: The seasonal series from a decomposition.
+        period: The seasonal period to group by (e.g., 7 for weekly, 365 for yearly).
+        smoothing: Whether to apply smoothing to the average pattern.
+        method: Smoothing method ('moving_average' or 'savgol').
+        window: Window size for smoothing.
+        polyorder: Polynomial order for Savitzky-Golay filter.
+
+    Returns:
+        A series representing the average seasonal pattern.
+
+    Raises:
+        ValueError: If inputs are invalid or incompatible.
+    """
+    if not isinstance(seasonal_component.index, pd.DatetimeIndex):
+        raise ValueError("Seasonal component must have a DatetimeIndex.")
+
+    if period <= 0:
+        raise ValueError("Period must be positive.")
+
+    if len(seasonal_component) < period:
+        raise ValueError("Seasonal component length must be at least equal to period.")
+
+    # Check for missing values
+    if seasonal_component.isna().any():
+        print(
+            f"Warning: {seasonal_component.isna().sum()} missing values found. Using available data.",
+        )
+
+    # Calculate average pattern by grouping observations by their position within the period
+    avg_pattern = seasonal_component.groupby(
+        np.arange(len(seasonal_component)) % period,
+    ).mean()
+
+    # Apply smoothing if requested
+    if smoothing:
+        if window > period:
+            raise ValueError(
+                "Smoothing window must be less than or equal to the period.",
+            )
+        if window % 2 == 0:
+            window += 1
+
+        if method == "moving_average":
+            avg_pattern = avg_pattern.rolling(
+                window=window,
+                center=True,
+                min_periods=1,
+            ).mean()
+        elif method == "savgol":
+            if window < polyorder + 2:
+                raise ValueError("Window too small for the given polyorder.")
+            avg_pattern = pd.Series(
+                savgol_filter(
+                    avg_pattern.values,
+                    window_length=window,
+                    polyorder=polyorder,
+                ),
+                index=avg_pattern.index,
+            )
+        else:
+            raise ValueError(
+                "Unknown smoothing method. Use 'moving_average' or 'savgol'.",
+            )
+
+    return avg_pattern
+
+
+def calculate_residual_covariance(residuals_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculates the covariance matrix for a DataFrame of residuals.
+
+    Args:
+        residuals_df: DataFrame where each column is a residual series.
+
+    Returns:
+        The covariance matrix as a DataFrame.
+    """
+    return residuals_df.cov()
 
 
 # --- Helper Function ---
@@ -224,7 +319,6 @@ def test_residual_properties(df: pd.DataFrame, alpha: float = 0.05) -> dict[str,
 def create_decomposition_figure(
     df: pd.DataFrame,
     title_text: str = "Decomposition",
-    decomposition: str = "stl",
 ) -> go.Figure:
     """Create a time series decomposition figure with original data, trend, seasonal, and residual components.
 
@@ -268,30 +362,22 @@ def create_decomposition_figure(
     )
 
     # Seasonal components
-    if decomposition == "mstl":
-        seasonal = ["seasonal_"]
-        seasonal_cols = [
-            col
-            for col in df.columns
-            if any(pattern in col.lower() for pattern in seasonal)
-        ]
-        for col in df[seasonal_cols]:
+    mstl_seasonal_cols = [col for col in df.columns if col.startswith("seasonal_")]
+    if mstl_seasonal_cols:
+        for col_name in mstl_seasonal_cols:
             fig.add_trace(
                 go.Scatter(
                     x=df.index,
-                    y=df[col],
-                    name=f"Seasonal {col}",
+                    y=df[col_name],
+                    name=col_name.replace("_", " ").title(),
                 ),
                 row=3,
                 col=1,
             )
-    else:  # stl or other types
+    elif "seasonal" in df.columns:
+        # Caso STL: traza la única componente estacional
         fig.add_trace(
-            go.Scatter(
-                x=df["seasonal"].index,
-                y=df["seasonal"],
-                name="Seasonal",
-            ),
+            go.Scatter(x=df.index, y=df["seasonal"], name="Seasonal"),
             row=3,
             col=1,
         )
@@ -342,7 +428,7 @@ def plot_residual_distribution(
         y1=1,
         xref="x",
         yref="paper",
-        line=dict(color="red", dash="dash"),
+        line=dict(color="crimson", dash="dash"),
         name="Median",
     )
 
@@ -357,6 +443,46 @@ def plot_residual_distribution(
     )
 
     return fig
+
+
+def plot_average_seasonal_pattern(
+    avg_pattern: pd.Series,
+    period: int,
+) -> go.Figure:
+    """Creates a line plot for the average seasonal pattern."""
+    fig = go.Figure(
+        go.Scatter(x=avg_pattern.index, y=avg_pattern.values, mode="lines"),
+    )
+    fig.update_layout(
+        title=f"Average Seasonal Pattern (Period: {period})",
+        xaxis_title=f"Timestep (0 to {period - 1})",
+        yaxis_title="Average Seasonal Value",
+        template="plotly_white",
+    )
+    return fig
+
+
+def plot_covariance_matrix(cov_matrix: pd.DataFrame) -> go.Figure:
+    """Creates a heatmap plot for a covariance matrix."""
+    fig = go.Figure(
+        go.Heatmap(
+            z=cov_matrix.values,
+            x=cov_matrix.columns,
+            y=cov_matrix.index,
+            colorscale="Viridis",
+            # zmin=-1,
+            # zmax=1,
+        ),
+    )
+    fig.update_layout(
+        title="Residuals Covariance Matrix",
+        xaxis_title="Series",
+        yaxis_title="Series",
+    )
+    return fig
+
+
+# --- Granularity Detection
 
 
 def detect_granularity(series: pd.Series):
