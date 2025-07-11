@@ -31,7 +31,7 @@ class ModelStrategy(Protocol):
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "ModelStrategy": ...
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray: ...
+    def predict(self, X: pd.DataFrame) -> np.ndarray | pd.DataFrame: ...
 
     def get_feature_importance(self) -> dict[str, float] | None: ...
 
@@ -49,20 +49,65 @@ class TreeBasedStrategy(ModelStrategy):
         """Initialize the tree-based strategy."""
         self.model_class = model_class
         self.params = params or {"random_state": 12}
-        self.model = self.model_class(**self.params)
+        # self.model = self.model_class(**self.params)
         self.is_fitted = False
         self.feature_names = None
 
+        # Models for lower, median (point estimate), and upper quantiles
+        self.model = None
+        self.model_lower = None
+        self.model_upper = None
+
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "TreeBasedStrategy":
         self.feature_names = X.columns.tolist()
-        self.model.fit(X, y)
+
+        # Check if quantile prediction is requested
+        alpha = self.params.pop("alpha", None)
+
+        if alpha:
+            # --- Quantile Regression ---
+            # Lower bound model
+            params_lower = self.params.copy()
+            params_lower.update({"objective": "quantile", "alpha": alpha / 2.0})
+            self.model_lower = self.model_class(**params_lower)
+            self.model_lower.fit(X, y)
+
+            # Upper bound model
+            params_upper = self.params.copy()
+            params_upper.update({"objective": "quantile", "alpha": 1 - (alpha / 2.0)})
+            self.model_upper = self.model_class(**params_upper)
+            self.model_upper.fit(X, y)
+
+            # Median model for point prediction (quantile regression at 0.5)
+            params_median = self.params.copy()
+            params_median.update({"objective": "quantile", "alpha": 0.5})
+            self.model = self.model_class(**params_median)
+            self.model.fit(X, y)
+
+        else:
+            # --- Standard Regression (MSE) ---
+            # Use default objective (L2 loss) for point prediction
+            self.model = self.model_class(**self.params)
+            self.model.fit(X, y)
+            self.model_lower = None
+            self.model_upper = None
+
         self.is_fitted = True
         return self
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Predicts point estimates and optional prediction intervals."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before prediction")
-        return self.model.predict(X)
+
+        predictions = pd.DataFrame(index=X.index)
+        predictions["predicted"] = self.model.predict(X)
+
+        if self.model_lower and self.model_upper:
+            predictions["predicted_lower"] = self.model_lower.predict(X)
+            predictions["predicted_upper"] = self.model_upper.predict(X)
+
+        return predictions
 
     def get_feature_importance(self) -> dict[str, float] | None:
         if not self.is_fitted or not self.feature_names:
@@ -134,15 +179,30 @@ class UnivariateTimeSeriesStrategy(ModelStrategy):
         self.params = params or {}
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "UnivariateTimeSeriesStrategy":
+        # Store alpha for prediction phase
+        self.alpha = self.params.pop("alpha", None)
         self.model = self.model_class(y, **self.params).fit()
         self.is_fitted = True
         return self
 
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
+    def predict(self, X: pd.DataFrame) -> pd.DataFrame:
         if not self.is_fitted:
             raise ValueError("Model must be fitted before prediction")
-        forecast = self.model.forecast(steps=len(X))
-        return np.array(forecast)
+
+        # Use get_forecast to get intervals
+        forecast_results = self.model.get_forecast(
+            steps=len(X),
+            alpha=self.alpha or 0.05,
+        )
+        summary = forecast_results.summary_frame(alpha=self.alpha or 0.05)
+
+        # Build results DataFrame
+        predictions = pd.DataFrame(index=X.index)
+        predictions["predicted"] = summary["mean"]
+        predictions["predicted_lower"] = summary["mean_ci_lower"]
+        predictions["predicted_upper"] = summary["mean_ci_upper"]
+
+        return predictions
 
     def get_feature_importance(self) -> dict[str, float] | None:
         return None  # Not applicable for these models
@@ -359,7 +419,6 @@ class TimeSeriesModeler:
 
         for train_idx, test_idx in tscv.split(X):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
             fold_strategy = self.strategy.__class__(
@@ -371,9 +430,19 @@ class TimeSeriesModeler:
 
             y_pred = fold_modeler.predict(X_test)
 
-            scores["mse"].append(mean_squared_error(y_test, y_pred))
-            scores["mae"].append(mean_absolute_error(y_test, y_pred))
-            scores["r2"].append(r2_score(y_test, y_pred))
+            if isinstance(y_pred, pd.DataFrame):
+                if "predicted" in y_pred.columns:
+                    y_pred_values = y_pred["predicted"].values
+                else:
+                    # Fallback: usar la primera columna
+                    y_pred_values = y_pred.iloc[:, 0].values
+            else:
+                # Si es un array, usarlo directamente
+                y_pred_values = y_pred
+
+            scores["mse"].append(mean_squared_error(y_test, y_pred_values))
+            scores["mae"].append(mean_absolute_error(y_test, y_pred_values))
+            scores["r2"].append(r2_score(y_test, y_pred_values))
 
         self.cv_results = {
             "model_params": self.strategy.params,
@@ -436,42 +505,55 @@ class TimeSeriesModeler:
 # --- Plot functions ---
 def create_forecast_vs_actual(
     df: pd.DataFrame,
-    # datetime_col: str,
     actual_col: str,
     predicted_col: str,
     title: str = "Predicted vs Actual",
 ) -> go.Figure:
-    """Plot actual vs predicted values using Plotly.
-
-    Parameters:
-    - df: DataFrame containing datetime, actual, and predicted columns
-    - datetime_col: Name of the datetime column
-    - actual_col: Name of the actual (true) values column
-    - predicted_col: Name of the predicted values column
-    - title: Title of the chart
-    - height: Height of the figure
-    - width: Width of the figure
-
-    Returns:
-    - Plotly Figure
-    """
+    """Plot actual vs predicted values with optional uncertainty."""
     fig = go.Figure()
 
+    # Add uncertainty band if present
+    if "predicted_lower" in df.columns and "predicted_upper" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["predicted_upper"],
+                mode="lines",
+                line=dict(width=0),
+                name="Upper Bound",
+                showlegend=False,
+            ),
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["predicted_lower"],
+                mode="lines",
+                line=dict(width=0),
+                fillcolor="rgba(68, 68, 68, 0.2)",
+                fill="tonexty",
+                name="Uncertainty Interval",
+                showlegend=False,
+            ),
+        )
+
+    # Add actual and predicted lines
     fig.add_trace(
         go.Scatter(
             x=df.index,
             y=df[actual_col],
             mode="lines",
             name="Actual",
+            # line=dict(color="royalblue", width=2),
         ),
     )
-
     fig.add_trace(
         go.Scatter(
             x=df.index,
             y=df[predicted_col],
             mode="lines",
             name="Predicted",
+            line=dict(color="crimson"),
         ),
     )
 
@@ -479,6 +561,7 @@ def create_forecast_vs_actual(
         title=title,
         xaxis_title="Date",
         yaxis_title="Generation (MWh)",
+        legend=dict(x=0.01, y=0.99),
     )
 
     return fig

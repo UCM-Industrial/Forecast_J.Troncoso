@@ -172,12 +172,12 @@ def render_config() -> dict[str, Any] | None:
         default=[col for col in numeric_cols if col != target_col],
     )
 
-    st.download_button(
-        "Download actual CSV",
-        data[[*feature_cols, target_col]].to_csv(),
-        file_name=f"{target_col}_master_df.csv",
-        mime="text/csv",
-    )
+    # st.download_button(
+    #     "Download actual CSV",
+    #     data[[*feature_cols, target_col]].to_csv(),
+    #     file_name=f"{target_col}_master_df.csv",
+    #     mime="text/csv",
+    # )
 
     st.subheader("Select Model")
     model_type = st.selectbox(
@@ -192,6 +192,19 @@ def render_config() -> dict[str, Any] | None:
             "Holt-Winters",
         ],
     )
+    st.subheader("Prediction Interval")
+    predict_intervals = st.toggle("Calculate Prediction Intervals")
+    alpha = None
+    if predict_intervals:
+        confidence = st.slider(
+            "Confidence Level",
+            0.80,
+            0.99,
+            0.95,
+            0.01,
+            help="The confidence level for the prediction interval.",
+        )
+        alpha = 1 - confidence  # Alpha is the significance level
 
     on_grid = st.toggle("Grid search")
     # tab1, tab2 = st.tabs(["Cross Validation", "Grid Search"])
@@ -234,6 +247,17 @@ def render_config() -> dict[str, Any] | None:
         if not target_col or not feature_cols:
             st.error("Please select a target and at least one feature.")
             return None
+
+        # Add alpha to the params if intervals are enabled
+        if alpha is not None:
+            if model_type.lower().replace(" ", "-") in [
+                "xgboost",
+                "lightgbm",
+                "catboost",
+                "arima",
+                "holt-winters",
+            ]:
+                params["alpha"] = alpha
 
         return {
             "data": data,
@@ -455,7 +479,7 @@ def run_training_session(
             predictions = modeler.predict(X_test)
             metrics = modeler.evaluate_regression_metrics(
                 y_true=y_test,
-                y_pred=predictions,
+                y_pred=predictions["predicted"],
             )
             run_summary = {
                 "model_type": config["model_type"],
@@ -472,12 +496,19 @@ def run_training_session(
 
             st.session_state.results.append(run_summary)
             st.session_state.latest_run = {
-                "predictions_df": pd.DataFrame(
-                    {"actual": y_test, "predicted": predictions},
-                    index=X_test.index,
+                "predictions_df": pd.concat(
+                    [y_test.rename("actual"), predictions],
+                    axis=1,
                 ),
                 **run_summary,
             }
+            # st.session_state.latest_run = {
+            #     "predictions_df": pd.DataFrame(
+            #         {"actual": y_test, "predicted": predictions},
+            #         index=X_test.index,
+            #     ),
+            #     **run_summary,
+            # }
             st.write(run_summary)
             st.session_state.feature_importance = modeler.get_feature_importance()
             st.session_state.shap_values = shap_values
