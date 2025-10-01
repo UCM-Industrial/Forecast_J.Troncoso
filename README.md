@@ -1,6 +1,6 @@
 # RECAST
 
-Advanced time series decomposition module to uncover hidden patterns in energy demand dynamics across multiple sources.
+This tool is an open-source computational platform for predicting renewable energy generation (solar and wind) in Chile using machine learning, weather models, and geospatial data.
 
 ## Setup
 
