@@ -2,7 +2,6 @@ import gc
 import tempfile
 from pathlib import Path
 
-import dask
 import geopandas as gpd
 import leafmap.foliumap as leafmap
 import pandas as pd
@@ -97,7 +96,9 @@ def extract_regional_means(
         lat_name=latitude,
         lon_name=longitude,
     )
+    print("Mask \n", mask)
     regional_means = da.groupby(mask).mean(dim=[latitude, longitude])
+    print("Reginoal Means\n", regional_means)
 
     # NOTE: This is a temporal fix
     if "isobaricInhPa" in regional_means.dims:
@@ -107,8 +108,7 @@ def extract_regional_means(
     # Convert to DataFrame
     df = regional_means.to_pandas()
 
-    if hasattr(df.index, "to_datetimeindex"):
-        df.index = df.index.to_datetimeindex()
+    print(df.index)
 
     df.index = df.index.tz_localize("UTC").tz_convert(output_timezone)
 
@@ -127,8 +127,8 @@ def _standardize_time_coord(
     custom_time: str | None = None,
     warn_only: bool = False,
 ) -> xr.DataArray:
-    """Standardize time coordinate to 'datetime', using da or dataset context."""
-    # Use dataset context to look for time coordinates if missing in da
+    """Estandariza la coordenada de tiempo a 'datetime', usando el contexto de da o dataset."""
+    # Combinar coordenadas de da y dataset si está disponible
     if dataset is not None:
         da_coords = set(da.coords) | set(dataset.coords)
     else:
@@ -136,22 +136,24 @@ def _standardize_time_coord(
 
     dims = list(da.dims)
 
-    # Case 1: Custom time coordinate
+    # Caso 1: Coordenada de tiempo personalizada
     if custom_time and custom_time in da_coords:
         if custom_time in da.coords:
             return da.rename({custom_time: "datetime"})
         else:
             return da.assign_coords(datetime=dataset[custom_time])
 
-    # Case 2: Forecast-style
-    if "valid_time" in da.coords:
-        da = da.rename({"time": "datetime"})
-        da = da.assign_coords(datetime=da["valid_time"])
-        if "valid_time" in da.coords:
-            da = da.drop_vars("valid_time")
-        return da
+    # Caso 2: 'step' en dimensiones y 'time' como coordenada escalar (nuevo)
+    if "step" in dims and "time" in da.coords:
+        if da["time"].ndim == 0:  # 'time' es escalar
+            valid_time = da["time"] + da["step"]
+            return da.assign_coords(datetime=valid_time).swap_dims({"step": "datetime"})
+        else:
+            raise ValueError(
+                "No se puede manejar una coordenada 'time' no escalar con dimensión 'step'.",
+            )
 
-    # Case 3: Forecast-style with time/step/valid_time (stacking)
+    # Caso 3: Estilo de pronóstico con 'time', 'step' y 'valid_time'
     if {"time", "step", "valid_time"}.issubset(da_coords):
         if "time" in dims and "step" in dims:
             da_stacked = da.stack(forecast_time=("time", "step"))
@@ -168,19 +170,26 @@ def _standardize_time_coord(
             ]
             return da.drop_vars([c for c in drop_coords if c in da.coords])
 
-    # Case 4: Simple time dimension
+        if "valid_time" in dims:
+            return da.rename({"valid_time": "datetime"})
+        if "valid_time" in da.coords:
+            return da.assign_coords(datetime=da["valid_time"])
+        if dataset is not None and "valid_time" in dataset:
+            return da.assign_coords(datetime=dataset["valid_time"])
+
+    # Caso 4: Dimensión de tiempo simple
     if "time" in dims:
         return da.rename({"time": "datetime"})
 
-    # Case 5: Already standardized
+    # Caso 5: Ya estandarizado
     if "datetime" in dims or "datetime" in da.coords:
         return da
 
-    # Case 6: Cannot resolve
+    # Caso 6: No se puede resolver
     msg = (
-        f"⛔ No reconocida coordenada de tiempo.\n"
+        f"⛔ No se encontró una coordenada de tiempo reconocida.\n"
         f"  - dims: {dims}\n"
-        f"  - coordenadas: {sorted(da_coords)}"
+        f"  - coords inferidas: {sorted(da_coords)}"
     )
     if warn_only:
         import warnings
@@ -370,15 +379,6 @@ def process_dataset_optimized(
 
 
 if __name__ == "__main__":
-    dask.config.set(
-        {
-            "array.chunk-size": "128 MB",
-            "distributed.worker.memory.target": 0.6,
-            "distributed.worker.memory.spill": 0.7,
-            "distributed.worker.memory.pause": 0.8,
-            "distributed.worker.memory.terminate": 0.9,
-        },
-    )
     # --- Declare Paths ---
     data_path = Path().cwd() / "data"
 
@@ -387,9 +387,7 @@ if __name__ == "__main__":
     ssrd_path = (
         "/home/kyoumas/repos/ts_energy_patterns/data/1_pre-in/hourly/ssrd_hourly.grib"
     )
-    regions_chile_path = (
-        "/home/kyoumas/repos/ts_energy_patterns/data/1_pre-in/masks/Comunas/comunas.shp"
-    )
+    regions_chile_path = "/home/kyoumas/repos/ts_energy_patterns/data/1_pre-in/masks/Regiones/Regional.shp"
 
     # --- Define test data ---
     print("Loading regions...")
@@ -423,7 +421,7 @@ if __name__ == "__main__":
         variables=variables_to_extract,
         path=output_path,
         regions_gdf=regions_chile,
-        column_names="Comuna",
+        column_names="Region",
         batch_size=1,
     )
 
