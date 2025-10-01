@@ -1,4 +1,4 @@
-# TS Energy Patterns
+# RECAST
 
 Advanced time series decomposition module to uncover hidden patterns in energy demand dynamics across multiple sources.
 
