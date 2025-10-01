@@ -162,9 +162,9 @@ def prepare_dataframes_for_join(
     prepared_dfs = {}
 
     for filename, df in dataframes.items():
-        df_copy = df.copy()
+        df_copy = df.copy().reset_index()
         # WARNING: Provitional fix
-        df_copy = df_copy.reset_index()
+        # df_copy = df_copy.reset_index()
 
         # Ensure datetime column exists
         if datetime_col not in df_copy.columns:
@@ -521,7 +521,7 @@ def render_cyclical_features_section():
                 temp_dfs,
                 features=selected_features,
             )
-            st.success("✅ Cyclical features added!")
+            st.success("Cyclical features added!")
 
             with st.expander("Preview with cyclical features"):
                 st.dataframe(df_with_features.head())

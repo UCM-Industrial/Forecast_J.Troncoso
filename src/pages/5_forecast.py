@@ -77,6 +77,13 @@ selected_model_name = st.sidebar.selectbox(
     options=list(MODELS_CONFIG.keys()),
 )
 
+data_source = st.sidebar.selectbox(
+    "Source",
+    ("aifs-single", "ifs", "gfs"),
+    index=0,
+    help="Currently, only 'aifs-single' is fully stable. Other sources may produce errors.",
+)
+
 if st.sidebar.button("Update Data and Predict"):
     # Runs the full ETL pipeline from the backend
     with st.spinner(
@@ -84,7 +91,7 @@ if st.sidebar.button("Update Data and Predict"):
     ):
         try:
             # The backend function saves files in TEMP_DIR
-            run_etl_pipeline(TEMP_DIR)
+            run_etl_pipeline(TEMP_DIR, source=data_source)
             st.sidebar.success("Data updated successfully.")
             # Clear cache to force reloading new data
             st.cache_data.clear()
@@ -112,6 +119,7 @@ if results is not None:
             mode="lines",
             name="Forecast",
             line=dict(color=config["color"]),
+            fill="tozeroy",
         ),
     )
     fig.update_layout(

@@ -1,4 +1,3 @@
-import traceback
 import warnings
 from pathlib import Path
 
@@ -9,6 +8,7 @@ import streamlit as st
 import xarray as xr
 
 from preprocessor import (
+    convert_ssrd_to_watts,
     create_map,
     display_both,  # noqa: F401
     display_climate_data,  # noqa: F401
@@ -55,7 +55,6 @@ def load_grib_dataset(grib_path: str) -> xr.Dataset:
     return ds
 
 
-@st.cache_data
 def process_regional_means(
     grib_path: str,
     shapefile_path: str,
@@ -71,6 +70,12 @@ def process_regional_means(
     ds = load_grib_dataset(grib_path)
     gdf = load_shapefile(shapefile_path)
 
+    if data_variable == "ssrd":
+        ds = convert_ssrd_to_watts(ds["ssrd"], accumulation_hours=1)
+        ds = xr.Dataset({"ssrd": ds})
+
+        ds = ds[[data_variable]]
+
     return extract_regional_means(
         _ds=ds,
         _gdf=gdf,
@@ -80,7 +85,7 @@ def process_regional_means(
         time_coord=time_coord,
         chunk_size=chunk_size,
         column_names=column_names,
-        # output_timezone,
+        output_timezone=output_timezone,
     )
 
 
@@ -126,7 +131,7 @@ def render_file_input_section() -> tuple[str | None, str | None]:
         if grib_path:
             valid, error_msg = validate_file_path(grib_path, "GRIB")
             if valid:
-                st.success("✅ Geospatial file found")
+                st.success("Geospatial file found")
             else:
                 st.error(error_msg)
                 grib_path = None
@@ -141,7 +146,7 @@ def render_file_input_section() -> tuple[str | None, str | None]:
         if shapefile_path:
             valid, error_msg = validate_file_path(shapefile_path, "Shapefile")
             if valid:
-                st.success("✅ Shapefile found")
+                st.success("Shapefile found")
             else:
                 st.error(error_msg)
                 shapefile_path = None
@@ -151,7 +156,7 @@ def render_file_input_section() -> tuple[str | None, str | None]:
 
 def render_grib_info(grib_path: str):
     """Display GRIB file information."""
-    st.subheader("📊 GRIB File Information")
+    st.subheader("Geospatial File Information")
 
     try:
         metadata = load_grib_metadata(grib_path)
@@ -184,7 +189,7 @@ def render_grib_info(grib_path: str):
 
 def render_shapefile_info(shapefile_path: str):
     """Display shapefile information."""
-    st.subheader("🗺️ Shapefile Information")
+    st.subheader("Shapefile Information")
 
     try:
         gdf = load_shapefile(shapefile_path)
@@ -202,7 +207,7 @@ def render_shapefile_info(shapefile_path: str):
                     st.write(f"• {col}")
 
         # Preview data
-        with st.expander("📋 Data Preview", expanded=False):
+        with st.expander("Data Preview", expanded=False):
             st.dataframe(gdf.drop("geometry", axis=1).head())
         return gdf.columns.tolist()
 
@@ -289,7 +294,6 @@ def render_processing_section(
         )
 
     with col3:
-        # st.write("**Memory Optimization:**")
         lat_chunk = st.number_input(
             "Latitude Chunk Size:",
             value=50,
@@ -398,8 +402,8 @@ def process_data(
         # render_cyclical_features_section(df)
 
     except Exception as e:
-        st.error(f"❌ Processing failed: {e}")
-        st.text(traceback.format_exc())
+        st.error(f"Processing failed: {e}")
+        st.write(e)
         # st.error("Please check your file paths and parameters.")
 
 

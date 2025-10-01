@@ -172,13 +172,6 @@ def render_config() -> dict[str, Any] | None:
         default=[col for col in numeric_cols if col != target_col],
     )
 
-    # st.download_button(
-    #     "Download actual CSV",
-    #     data[[*feature_cols, target_col]].to_csv(),
-    #     file_name=f"{target_col}_master_df.csv",
-    #     mime="text/csv",
-    # )
-
     st.subheader("Select Model")
     model_type = st.selectbox(
         "Model Type",
