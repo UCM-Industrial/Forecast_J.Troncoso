@@ -1,4 +1,4 @@
-# Python-generated files
+# ── Python ──
 __pycache__/
 *.py[oc]
 build/
@@ -6,13 +6,35 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# ── Virtual environments ──
 .venv
 
-# Data
-data/raw/**
-data/processed/csv_files/**
-
-logs/
-
+# ── Data & Artifacts ──
 data/
+tmp/
+logs/
+models/
+
+# ── Credentials ──
+.env
+credentials/
+*.json
+!config/*.yaml
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Docker ──
+docker-compose.override.yml
+
+# ── Misc ──
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

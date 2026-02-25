@@ -1,0 +1,21 @@
+# ── RECAST API Image ──
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install only API dependencies
+COPY pyproject.toml uv.lock* ./
+RUN uv pip install --system --no-cache \
+    fastapi uvicorn pydantic pydantic-settings pyyaml \
+    google-cloud-storage pandas xgboost joblib
+
+COPY src/ ./src/
+COPY config/ ./config/
+
+RUN mkdir -p logs tmp
+
+EXPOSE 8080
+
+CMD ["uvicorn", "src.prediction.api:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,0 +1,52 @@
+# ============================================================
+#  RECAST — Docker Compose (Local Development)
+# ============================================================
+
+services:
+  # ── Prefect Server UI ────────────────────────────────────
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: recast-prefect
+    ports:
+      - "4200:4200"
+    command: prefect server start --host 0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Pipeline Worker ──────────────────────────────────────
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: recast-pipeline
+    env_file: .env
+    environment:
+      - PREFECT_API_URL=http://prefect-server:4200/api
+    volumes:
+      - ./data:/app/data
+      - ./tmp:/app/tmp
+      - ./logs:/app/logs
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+
+  # ── Prediction API ──────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: recast-api
+    ports:
+      - "8080:8080"
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

@@ -1,10 +1,7 @@
-from ._util import export_to_pkl, import_from_pkl
-from .logging_config import setup_logging
-from .scenarios import Scenario
+"""RECAST — Renewable Energy Scenario Forecasting Toolkit.
 
-__all__ = [
-    "Scenario",
-    "export_to_pkl",
-    "import_from_pkl",
-    "setup_logging",
-]
+Professional end-to-end pipeline for solar and wind energy
+generation forecasting using XGBoost and ECMWF weather data.
+"""
+
+__version__ = "2.0.0"

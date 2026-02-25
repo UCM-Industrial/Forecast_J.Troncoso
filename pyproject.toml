@@ -1,55 +1,53 @@
 [project]
-name = "ts-energy-patterns"
-version = "0.1.0"
-description = "Time series decomposition module for analyzing energy demand patterns and forecast"
+name = "recast"
+version = "2.0.0"
+description = "End-to-end pipeline for renewable energy generation forecasting using XGBoost and ECMWF weather data"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "catboost>=1.2.8",
-  "dask>=2025.5.1",
-  "getgfs>=1.2.0",
-  "leafmap>=0.48.5",
-  "lightgbm>=4.6.0",
-  "matplotlib>=3.10.1",
-  "nbformat>=5.10.4",
-  "numpy>=2.2.4",
-  "openpyxl>=3.1.5",
-  "pandas>=2.2.3",
-  "plotly>=6.1.1",
-  "scikit-learn>=1.6.1",
-  "seaborn>=0.13.2",
-  "setuptools>=80.9.0",
-  "shap>=0.48.0",
-  "statsmodels>=0.14.4",
+  # ── Core ML ──
   "xgboost>=3.0.2",
+  "scikit-learn>=1.6.1",
+  "pandas>=2.2.3",
+  "numpy>=2.2.4",
+  "joblib>=1.4.2",
+
+  # ── Climate Data ──
+  "xarray>=2025.4.0",
+  "cfgrib>=0.9.15.0",
+  "netcdf4>=1.7.2",
+  "ecmwf-opendata>=0.3.20",
+
+  # ── Geospatial ──
+  "geopandas>=1.0.1",
+  "regionmask>=0.13.0",
+  "shapely>=2.1.1",
+
+  # ── Cloud & API ──
+  "google-cloud-storage>=2.19.0",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+
+  # ── Orchestration ──
+  "prefect>=3.0.0",
+
+  # ── Configuration & Utils ──
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.7.0",
+  "pyyaml>=6.0.2",
+  "tenacity>=9.1.0",
 ]
 
 [dependency-groups]
 dev = [
-  "catppuccin>=2.4.1",
-  "cdsapi>=0.7.6",
-  "cfgrib>=0.9.15.0",
-  "dask>=2025.4.1",
-  "ecmwf-opendata>=0.3.20",
-  "flox>=0.10.3",
-  "geopandas>=1.0.1",
-  "ipykernel>=6.29.5",
-  "ipywidgets>=8.1.7",
-  "netcdf4>=1.7.2",
-  "rasterio>=1.4.3",
-  "regionmask>=0.13.0",
-  "rioxarray>=0.19.0",
+  "pytest>=8.3.0",
   "ruff>=0.11.4",
-  "scipy>=1.15.2",
-  "shapely>=2.1.1",
-  "streamlit>=1.44.1",
-  "tabulate>=0.9.0",
-  "tqdm>=4.67.1",
-  "xarray>=2025.4.0",
+  "ty>=0.0.1a7",
+  "httpx>=0.28.0",
 ]
 
 [tool.ruff]
-src = ["src"] # Source code
+src = ["src"]
 exclude = [
   ".venv",
   ".mypy_cache",
@@ -59,9 +57,9 @@ exclude = [
   "dist",
   ".git",
   ".pytest_cache",
-] # Common exclusions
+]
 
-line-length = 88
+line-length = 100
 
 [tool.ruff.lint]
 select = [
@@ -71,10 +69,9 @@ select = [
   "UP",   # pyupgrade
   "D",    # pydocstyle
   "ANN",  # flake8-annotations
-  "S",    # flake8-simplify
-  "BLE",  # flake8-blake3
+  "S",    # flake8-bandit
+  "BLE",  # flake8-blind-except
   "A",    # flake8-builtins
-  "ARG",  # flake8-argparse
   "C4",   # flake8-comprehensions
   "PL",   # pylint (a subset)
   "TRY",  # tryceratops
@@ -85,18 +82,13 @@ select = [
   "N",    # pep8-naming
   "COM",  # flake8-commas
   "PERF", # Perflint
+  "PLC",  # pylint-convention
 ]
 
-# select = ["ALL"]
-
 ignore = [
-  "E501",   # Line too long (if you have a higher line-length and want to allow it)
-  "D100",   # Missing docstring (if you're not strict about docstrings)
-  "D101",   # Missing docstring in public class
-  "D102",   # Missing docstring in public method
-  "D103",   # Missing docstring in public function
+  "E501",   # Line too long
+  "D100",   # Missing docstring in public module
   "D104",   # Missing docstring in public package
-  "D105",   # Missing docstring in public module
   "D400",   # First line should end with a period
   "ANN001", # Missing type annotation for function argument
   "ANN002", # Missing type annotation for *args
@@ -110,9 +102,12 @@ fixable = ["E", "F", "I", "UP", "RUF", "SIM", "COM", "D"]
 
 pydocstyle.convention = "google"
 
-
 [tool.ruff.format]
 quote-style = "double"
 
-# [tool.ruff.isort]
-# known-first-party = ["own_package"]
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
