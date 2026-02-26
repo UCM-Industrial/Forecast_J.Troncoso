@@ -13,11 +13,36 @@ import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
+
 # ── YAML Sub-models ──────────────────────────────────────────
 
 
-class ECMWFConfig(BaseModel):
-    """ECMWF Open Data source configuration."""
+class ERA5Config(BaseModel):
+    """ERA5 reanalysis data configuration (training features)."""
+
+    dataset: str = "reanalysis-era5-single-levels"
+    product_type: str = "reanalysis"
+    variables: list[str] = Field(
+        default_factory=lambda: [
+            "100m_v_component_of_wind",
+            "100m_u_component_of_wind",
+            "surface_solar_radiation_downwards",
+        ],
+    )
+    area: list[float] = Field(default_factory=lambda: [-17, -76, -56, -66])
+    format: str = "grib"
+
+
+class CENConfig(BaseModel):
+    """CEN energy generation data configuration (training targets)."""
+
+    source_dir: str = "data/cen"
+    generation_col: str = "generation_mwh"
+    datetime_col: str = "datetime"
+
+
+class AIFSConfig(BaseModel):
+    """AIFS-single forecast configuration (prediction features)."""
 
     model: str = "aifs-single"
     type: str = "fc"
@@ -31,8 +56,12 @@ class ECMWFConfig(BaseModel):
 class GCSPrefixes(BaseModel):
     """GCS path prefixes for data organisation."""
 
-    raw: str = "raw/ecmwf"
-    processed: str = "processed"
+    raw_era5: str = "raw/era5"
+    raw_aifs: str = "raw/aifs"
+    raw_cen: str = "raw/cen"
+    processed_era5: str = "processed/era5_parquet"
+    processed_training: str = "processed/training"
+    processed_prediction: str = "processed/prediction"
     models: str = "models"
     predictions: str = "predictions"
 
@@ -91,8 +120,12 @@ class Settings(BaseSettings):
     Priority: environment variables > .env file > settings.yaml > defaults.
     """
 
-    # Fields populated from YAML (with defaults if YAML is missing)
-    ecmwf: ECMWFConfig = Field(default_factory=ECMWFConfig)
+    # Data source configs (from YAML)
+    era5: ERA5Config = Field(default_factory=ERA5Config)
+    cen: CENConfig = Field(default_factory=CENConfig)
+    aifs: AIFSConfig = Field(default_factory=AIFSConfig)
+
+    # Infrastructure configs (from YAML)
     gcs: GCSConfig = Field(default_factory=GCSConfig)
     geospatial: GeoConfig = Field(default_factory=GeoConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
@@ -100,6 +133,11 @@ class Settings(BaseSettings):
 
     # Fields from environment variables
     ecmwf_api_key: str = Field(default="", alias="ECMWF_API_KEY")
+    cds_api_key: str = Field(default="", alias="CDS_API_KEY")
+    cds_api_url: str = Field(
+        default="https://cds.climate.copernicus.eu/api",
+        alias="CDS_API_URL",
+    )
     gcs_bucket_name: str = Field(default="", alias="GCS_BUCKET_NAME")
     storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
     local_data_dir: str = Field(default="./data", alias="LOCAL_DATA_DIR")

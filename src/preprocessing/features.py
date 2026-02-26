@@ -213,5 +213,71 @@ def _prepare_solar_features(
     if n_plants is not None:
         ssrd["total_plants"] = n_plants
 
-    logger.info("Prepared solar features: %d rows × %d cols", *ssrd.shape)
+    logger.info("Prepared solar features: %d rows x %d cols", *ssrd.shape)
     return create_cyclical_features(ssrd, features=cyclical_features)
+
+
+# ── Training data preparation (ERA5 + CEN) ──────────────────
+
+
+def merge_era5_with_cen(
+    era5_parquet: str | Path,
+    cen_df: pd.DataFrame,
+    *,
+    target_col: str = "generation_mwh",
+    cyclical_features: list[str] | None = None,
+) -> pd.DataFrame:
+    """Merge ERA5 climate features with CEN generation targets.
+
+    Joins on datetime index to create a single training-ready
+    DataFrame with both features and target.
+
+    Args:
+        era5_parquet: Path to the ERA5 Parquet file (features).
+        cen_df: CEN generation DataFrame (target) with DatetimeIndex.
+        target_col: Name of the generation column in ``cen_df``.
+        cyclical_features: Datetime features to encode.
+
+    Returns:
+        Merged DataFrame with features + target, ready for training.
+
+    Raises:
+        FileNotFoundError: If the Parquet file does not exist.
+    """
+    if cyclical_features is None:
+        cyclical_features = ["hour", "month", "day", "dayofweek"]
+
+    era5_path = Path(era5_parquet)
+    if not era5_path.exists():
+        msg = f"ERA5 Parquet file not found: {era5_path}"
+        raise FileNotFoundError(msg)
+
+    era5_df = pd.read_parquet(era5_path)
+
+    # Ensure both have a compatible DatetimeIndex
+    if not isinstance(era5_df.index, pd.DatetimeIndex):
+        if "datetime" in era5_df.columns:
+            era5_df = era5_df.set_index("datetime")
+
+    if not isinstance(cen_df.index, pd.DatetimeIndex):
+        msg = "CEN DataFrame must have a DatetimeIndex"
+        raise ValueError(msg)
+
+    # Ensure target column exists
+    if target_col not in cen_df.columns:
+        msg = f"Column '{target_col}' not found in CEN data. Available: {list(cen_df.columns)}"
+        raise ValueError(msg)
+
+    # Inner join on datetime
+    merged = era5_df.join(cen_df[[target_col]], how="inner")
+    merged = merged.dropna(subset=[target_col])
+
+    logger.info(
+        "Merged ERA5 + CEN: %d rows x %d cols (target='%s')",
+        len(merged),
+        len(merged.columns),
+        target_col,
+    )
+
+    # Add cyclical features
+    return create_cyclical_features(merged, features=cyclical_features)

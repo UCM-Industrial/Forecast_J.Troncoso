@@ -1,7 +1,7 @@
 """RECAST — Training flow (Prefect).
 
-Weekly flow to retrain the XGBoost forecaster with
-accumulated historical data.
+Weekly flow to retrain XGBoost models using the
+accumulated ERA5+CEN training dataset.
 """
 
 from __future__ import annotations
@@ -14,30 +14,42 @@ from prefect.logging import get_run_logger
 
 from src.training.trainer import train_pipeline
 from src.utils.config import get_settings
-from src.utils.gcs import upload_blob
+from src.utils.gcs import download_blob, upload_blob
 from src.utils.logger import setup_logging
 
 
 @task(name="train-model")
-def train_model(
-    features_path: str | Path,
-    target_col: str,
-    technology: str,
-    date: str,
-) -> dict:
-    """Run the training pipeline for one technology."""
+def train_model(technology: str, date: str) -> dict:
+    """Train an XGBoost model for one technology.
+
+    Uses the accumulated training dataset (Parquet).
+    """
     logger = get_run_logger()
+    settings = get_settings()
+
+    # Download training dataset from storage
+    remote_training = f"{settings.gcs.prefixes.processed_training}/{technology}_training.parquet"
+    local_training = Path(f"tmp/training/{technology}_training.parquet")
+
+    try:
+        download_blob(remote_training, local_training)
+    except FileNotFoundError:
+        logger.warning(
+            "No training dataset found for '%s' at %s. Run training_data_flow first.",
+            technology,
+            remote_training,
+        )
+        return {"status": "skipped", "reason": "no training data"}
 
     model_output = Path(f"tmp/models/{technology}/{date}/model")
 
     results = train_pipeline(
-        features_path=features_path,
-        target_col=target_col,
+        features_path=local_training,
+        target_col=settings.cen.generation_col,
         model_output_path=model_output,
     )
 
     # Upload model and metadata to storage
-    settings = get_settings()
     model_file = Path(results["model_path"])
     meta_file = model_file.with_suffix(".meta.json")
 
@@ -49,7 +61,7 @@ def train_model(
         upload_blob(meta_file, remote_meta)
 
     logger.info(
-        "Model for '%s' trained and uploaded — R²=%.4f, MAE=%.4f",
+        "Model for '%s' trained — R2=%.4f, MAE=%.4f",
         technology,
         results["test_metrics"]["r2"],
         results["test_metrics"]["mae"],
@@ -59,45 +71,27 @@ def train_model(
 
 @flow(name="weekly-training", log_prints=True)
 def training_flow(
-    wind_features_path: str | Path | None = None,
-    solar_features_path: str | Path | None = None,
-    wind_target: str = "generation_mwh",
-    solar_target: str = "generation_mwh",
+    technologies: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Retrain XGBoost models for wind and solar.
+    """Retrain XGBoost models using ERA5+CEN training data.
 
     Args:
-        wind_features_path: Path to wind features CSV.
-        solar_features_path: Path to solar features CSV.
-        wind_target: Target column name for wind.
-        solar_target: Target column name for solar.
+        technologies: Technologies to train.  Defaults to config.
 
     Returns:
-        Dict with training results for each technology.
+        Dict with training results per technology.
     """
     setup_logging()
     logger = get_run_logger()
+    settings = get_settings()
 
     date = datetime.now().strftime("%Y%m%d")
+    technologies = technologies or settings.prediction.technologies
     logger.info("=== Training Flow — date=%s ===", date)
 
     results: dict[str, dict] = {}
-
-    if wind_features_path:
-        results["wind"] = train_model(
-            features_path=wind_features_path,
-            target_col=wind_target,
-            technology="wind",
-            date=date,
-        )
-
-    if solar_features_path:
-        results["solar"] = train_model(
-            features_path=solar_features_path,
-            target_col=solar_target,
-            technology="solar",
-            date=date,
-        )
+    for tech in technologies:
+        results[tech] = train_model(tech, date)
 
     logger.info("=== Training Flow complete ===")
     return results

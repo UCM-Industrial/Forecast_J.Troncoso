@@ -1,7 +1,9 @@
-"""RECAST — ECMWF Open Data client wrapper.
+"""RECAST — ECMWF Open Data client (AIFS-single).
 
-Thin wrapper around ``ecmwf.opendata.Client`` with automatic retries
-and structured logging.  Only supports the **aifs-single** model.
+Thin wrapper around ``ecmwf.opendata.Client`` for downloading
+**aifs-single** forecast data used in the **prediction** pipeline.
+
+For historical training data, see ``era5_client.py`` instead.
 """
 
 from __future__ import annotations
@@ -41,12 +43,12 @@ class ECMWFClient:
         from ecmwf.opendata import Client
 
         settings = get_settings()
-        self._model = model or settings.ecmwf.model
+        self._model = model or settings.aifs.model
         self._client = Client(source=source, model=self._model)
-        self._default_variables = settings.ecmwf.variables
-        self._default_steps = settings.ecmwf.steps
-        self._default_time = settings.ecmwf.time
-        self._default_type = settings.ecmwf.type
+        self._default_variables = settings.aifs.variables
+        self._default_steps = settings.aifs.steps
+        self._default_time = settings.aifs.time
+        self._default_type = settings.aifs.type
 
         logger.info(
             "ECMWFClient initialised — model=%s, source=%s",

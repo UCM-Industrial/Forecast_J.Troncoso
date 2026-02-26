@@ -1,7 +1,7 @@
-"""RECAST — Ingestion flow (Prefect).
+"""RECAST — Forecast ingestion flow (Prefect).
 
-Daily flow to download ECMWF Open Data forecasts and store
-them in GCS / local storage.
+Daily flow to download **AIFS-single** forecast data
+for the prediction pipeline.
 """
 
 from __future__ import annotations
@@ -15,19 +15,19 @@ from src.ingestion.downloader import download_and_store_forecast
 from src.utils.logger import setup_logging
 
 
-@task(name="download-ecmwf-forecast", retries=3, retry_delay_seconds=60)
+@task(name="download-aifs-forecast", retries=3, retry_delay_seconds=60)
 def download_forecast(date: str) -> str:
-    """Download and store a single forecast."""
+    """Download and store an AIFS-single forecast."""
     logger = get_run_logger()
-    logger.info("Starting ECMWF download for date=%s", date)
+    logger.info("Starting AIFS-single download for date=%s", date)
     uri = download_and_store_forecast(date=date)
     logger.info("Download complete: %s", uri)
     return uri
 
 
-@flow(name="daily-ingestion", log_prints=True)
+@flow(name="forecast-ingestion", log_prints=True)
 def ingestion_flow(date: str | None = None) -> str:
-    """Orchestrate the daily ECMWF data ingestion.
+    """Download daily AIFS-single forecast data for predictions.
 
     Args:
         date: Target date in ``YYYYMMDD`` format.
@@ -40,11 +40,11 @@ def ingestion_flow(date: str | None = None) -> str:
     logger = get_run_logger()
 
     date = date or datetime.now().strftime("%Y%m%d")
-    logger.info("=== Ingestion Flow — date=%s ===", date)
+    logger.info("=== Forecast Ingestion Flow — date=%s ===", date)
 
     uri = download_forecast(date)
 
-    logger.info("=== Ingestion Flow complete ===")
+    logger.info("=== Forecast Ingestion Flow complete ===")
     return uri
 
 
