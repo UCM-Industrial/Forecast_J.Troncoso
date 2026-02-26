@@ -14,7 +14,7 @@ from src.utils.config import get_settings
 from src.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from google.cloud.storage import Blob
+    pass
 
 logger = get_logger("gcs")
 
@@ -122,7 +122,7 @@ def blob_exists(
 
 def _get_bucket(bucket_name: str):
     """Lazily import and return a GCS bucket object."""
-    from google.cloud import storage  # noqa: PLC0415
+    from google.cloud import storage
 
     client = storage.Client()
     return client.bucket(bucket_name)
@@ -165,7 +165,7 @@ def _local_upload(local_path: Path, remote_path: str, data_dir: str) -> str:
     dest = Path(data_dir) / remote_path
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(local_path, dest)
-    logger.info("Copied %s → %s (local)", local_path.name, dest)
+    logger.info("Copied %s -> %s (local)", local_path.name, dest)
     return str(dest)
 
 
@@ -176,7 +176,7 @@ def _local_download(remote_path: str, local_path: Path, data_dir: str) -> Path:
         raise FileNotFoundError(msg)
     local_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, local_path)
-    logger.info("Copied %s → %s (local)", src, local_path)
+    logger.info("Copied %s -> %s (local)", src, local_path)
     return local_path
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.utils.config import Settings, load_settings
+from src.utils.config import load_settings
 
 
 class TestLoadSettings:

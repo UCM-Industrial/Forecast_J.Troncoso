@@ -94,13 +94,11 @@ def run_batch_prediction(
     if features_path is not None:
         features_path = Path(features_path)
     else:
-        remote_features = (
-            f"{settings.gcs.prefixes.processed}/{date}/{technology}_features.csv"
-        )
+        remote_features = f"{settings.gcs.prefixes.processed}/{date}/{technology}_features.csv"
         features_path = Path(f"tmp/features/{technology}_{date}.csv")
         download_blob(remote_features, features_path)
 
-    from src.preprocessing.features import read_csv_with_datetime  # noqa: PLC0415
+    from src.preprocessing.features import read_csv_with_datetime
 
     df = read_csv_with_datetime(features_path)
     logger.info("Loaded %d rows of features for %s prediction", len(df), technology)

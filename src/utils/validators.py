@@ -89,9 +89,7 @@ def check_no_nulls(
         includes columns that have nulls).
     """
     cols = columns or df.columns.tolist()
-    null_counts = {
-        col: int(df[col].isna().sum()) for col in cols if df[col].isna().any()
-    }
+    null_counts = {col: int(df[col].isna().sum()) for col in cols if df[col].isna().any()}
 
     if null_counts:
         logger.warning("%s has nulls: %s", name, null_counts)

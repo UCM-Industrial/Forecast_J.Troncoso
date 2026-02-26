@@ -51,7 +51,7 @@ class TestFindMissingDates:
             {
                 "date": pd.to_datetime(["2025-01-01", "2025-01-03"]),
                 "val": [1, 2],
-            }
+            },
         )
         missing = find_missing_dates(df, date_col="date")
         assert len(missing) == 1

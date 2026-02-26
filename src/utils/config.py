@@ -6,14 +6,12 @@ environment variable overrides via Pydantic Settings.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
-
 
 # ── YAML Sub-models ──────────────────────────────────────────
 

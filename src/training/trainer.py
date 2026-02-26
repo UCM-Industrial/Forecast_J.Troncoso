@@ -55,7 +55,7 @@ def train_pipeline(
 
     # ── Step 1: Load data ────────────────────────────────────
     logger.info("Loading features from %s", features_path)
-    from src.preprocessing.features import read_csv_with_datetime  # noqa: PLC0415
+    from src.preprocessing.features import read_csv_with_datetime
 
     df = read_csv_with_datetime(features_path)
 
@@ -166,7 +166,7 @@ def cross_validate(
             metrics["r2"],
         )
 
-    import numpy as np  # noqa: PLC0415
+    import numpy as np
 
     return {
         "mae_mean": float(np.mean(scores["mae"])),

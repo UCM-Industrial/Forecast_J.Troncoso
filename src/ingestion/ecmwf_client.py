@@ -38,7 +38,7 @@ class ECMWFClient:
         model: str | None = None,
         source: str = "ecmwf",
     ) -> None:
-        from ecmwf.opendata import Client  # noqa: PLC0415
+        from ecmwf.opendata import Client
 
         settings = get_settings()
         self._model = model or settings.ecmwf.model
@@ -112,7 +112,5 @@ class ECMWFClient:
 
         self._client.retrieve(**request)
 
-        logger.info(
-            "Download complete → %s (%.1f MB)", target, target.stat().st_size / 1e6
-        )
+        logger.info("Download complete -> %s (%.1f MB)", target, target.stat().st_size / 1e6)
         return target

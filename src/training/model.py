@@ -10,7 +10,7 @@ Replaces the generic Strategy-pattern machinery from the legacy
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -75,14 +75,14 @@ class XGBoostForecaster:
         self.is_fitted = True
 
         self._metadata = {
-            "trained_at": datetime.now(tz=timezone.utc).isoformat(),
+            "trained_at": datetime.now(tz=UTC).isoformat(),
             "features": self.feature_names,
             "n_samples": len(x),
             "params": self.params,
         }
 
         logger.info(
-            "Model trained on %d samples × %d features",
+            "Model trained on %d samples x %d features",
             len(x),
             len(self.feature_names),
         )

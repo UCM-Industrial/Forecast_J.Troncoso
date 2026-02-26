@@ -8,7 +8,6 @@ Adapted from legacy ``preprocessor.py``.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import xarray as xr
@@ -52,10 +51,7 @@ def load_dataset(filepath: str | Path, **kwargs: object) -> xr.Dataset:
 
     engine = _ENGINES.get(filepath.suffix)
     if engine is None:
-        msg = (
-            f"Unsupported file extension: '{filepath.suffix}'. "
-            f"Supported: {', '.join(_ENGINES)}"
-        )
+        msg = f"Unsupported file extension: '{filepath.suffix}'. Supported: {', '.join(_ENGINES)}"
         raise ValueError(msg)
 
     # Allow caller to override engine
@@ -122,9 +118,7 @@ def standardize_time_coord(
             da_result = da_stacked.assign_coords(
                 datetime=valid_times,
             ).swap_dims({"forecast_time": "datetime"})
-            drop_coords = [
-                c for c in ("forecast_time", "time", "step") if c in da_result.coords
-            ]
+            drop_coords = [c for c in ("forecast_time", "time", "step") if c in da_result.coords]
             return da_result.drop_vars(drop_coords)
 
         if "valid_time" in dims:

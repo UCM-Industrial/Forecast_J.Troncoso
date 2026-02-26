@@ -172,12 +172,12 @@ def _load_prediction(
     technology: str,
 ) -> PredictionResponse:
     """Download and parse a prediction CSV from storage."""
-    import tempfile  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
+    import tempfile
+    from pathlib import Path
 
-    import pandas as pd  # noqa: PLC0415
+    import pandas as pd
 
-    from src.utils.gcs import download_blob  # noqa: PLC0415
+    from src.utils.gcs import download_blob
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         tmp_path = Path(tmp.name)

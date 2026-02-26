@@ -19,7 +19,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.utils.logger import setup_logging  # noqa: E402
+from src.utils.logger import setup_logging
 
 
 def main() -> None:
@@ -34,7 +34,8 @@ def main() -> None:
     parser.add_argument("--date", help="Date in YYYYMMDD format")
     parser.add_argument("--wind-features", help="Path to wind features CSV (training)")
     parser.add_argument(
-        "--solar-features", help="Path to solar features CSV (training)"
+        "--solar-features",
+        help="Path to solar features CSV (training)",
     )
     parser.add_argument("--target", default="generation_mwh", help="Target column name")
 

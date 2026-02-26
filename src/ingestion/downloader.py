@@ -74,7 +74,7 @@ def download_and_store_forecast(
 
     finally:
         if cleanup and local_dir.exists():
-            import shutil  # noqa: PLC0415
+            import shutil
 
             shutil.rmtree(local_dir, ignore_errors=True)
             logger.debug("Cleaned up temp dir %s", local_dir)
